@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Local output
+output/
+outputs/
+ASCII输出/
+输出/
+*.ansi
+
+# Local research/reference clones
+reference/
+
+# Generated test exports
+tests/*
+!tests/smoke.py
+!tests/fixtures/
+!tests/fixtures/**
+
+# Media exports can become large quickly.
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.gif
+*.png
+!tests/fixtures/*.gif
+
+# Editors and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store

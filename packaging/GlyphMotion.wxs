@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="GlyphMotion"
+    Manufacturer="GlyphMotion Project"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="9192ffd6-9ea9-4e66-95dd-0dd364992f1f"
+    Scope="perUser"
+    Language="1033"
+    Compressed="yes">
+
+    <SummaryInformation Description="GlyphMotion Windows Installer" Manufacturer="GlyphMotion Project" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of GlyphMotion is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.AppExe)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="GlyphMotion">
+          <Component Id="GlyphMotionExeComponent" Guid="1754bb33-de6a-4ba9-8393-baa8d1613f6e">
+            <File Id="GlyphMotionExe" Source="$(var.AppExe)" />
+            <RegistryValue Root="HKCU" Key="Software\GlyphMotion" Name="InstallPath" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+          </Component>
+          <Component Id="ReadmeComponent" Guid="7e770f68-7d9c-4103-8203-9e0b749e8b3d">
+            <File Id="ReadmeFile" Source="$(var.ReadmeFile)" Name="README.md" />
+            <RegistryValue Root="HKCU" Key="Software\GlyphMotion" Name="ReadmeInstalled" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+          <Component Id="LicenseComponent" Guid="4c7b8bb9-8abc-4d04-89c3-f5e0f94e3ab5">
+            <File Id="LicenseFile" Source="$(var.LicenseFile)" Name="LICENSE.txt" />
+            <RegistryValue Root="HKCU" Key="Software\GlyphMotion" Name="LicenseInstalled" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+          <Component Id="NoticeComponent" Guid="f8aec9c4-f4d3-4d84-9f29-8e844e654968">
+            <File Id="NoticeFile" Source="$(var.NoticeFile)" Name="NOTICE.txt" />
+            <RegistryValue Root="HKCU" Key="Software\GlyphMotion" Name="NoticeInstalled" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+          <Component Id="ThirdPartyNoticeComponent" Guid="c83e3d79-9588-4438-bdcd-cb88fcd88e94">
+            <File Id="ThirdPartyNoticeFile" Source="$(var.ThirdPartyNoticeFile)" Name="THIRD_PARTY_NOTICES.md" />
+            <RegistryValue Root="HKCU" Key="Software\GlyphMotion" Name="ThirdPartyNoticeInstalled" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+          <Component Id="InstallFolderCleanupComponent" Guid="86bfeff5-af2c-4be2-8caa-08097b26e83e">
+            <RemoveFile Id="RemoveInstallFolderFiles" Name="*" On="uninstall" />
+            <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+            <RemoveFolder Id="RemoveLocalProgramsFolder" Directory="LocalProgramsFolder" On="uninstall" />
+            <RegistryValue Root="HKCU" Key="Software\GlyphMotion" Name="CleanupInstalled" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="GlyphMotion" />
+    </StandardDirectory>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="StartMenuShortcutComponent" Guid="ad86dc9c-0ba8-4759-89d2-64608158c061">
+        <Shortcut
+          Id="StartMenuShortcut"
+          Name="字影工坊 GlyphMotion"
+          Description="一键将图片、GIF、视频转换为字符动画"
+          Target="[INSTALLFOLDER]GlyphMotion.exe"
+          WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveStartMenuFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\GlyphMotion" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainFeature" Title="GlyphMotion" Level="1">
+      <ComponentRef Id="GlyphMotionExeComponent" />
+      <ComponentRef Id="ReadmeComponent" />
+      <ComponentRef Id="LicenseComponent" />
+      <ComponentRef Id="NoticeComponent" />
+      <ComponentRef Id="ThirdPartyNoticeComponent" />
+      <ComponentRef Id="InstallFolderCleanupComponent" />
+      <ComponentRef Id="StartMenuShortcutComponent" />
+    </Feature>
+  </Package>
+</Wix>
