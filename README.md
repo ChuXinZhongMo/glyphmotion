@@ -6,7 +6,7 @@
 
 - 输入：PNG、JPG、GIF、WEBP、BMP、MP4、MOV、MKV、AVI、WMV、WEBM，以及 FFmpeg 可读取的视频格式。
 - 输出：TXT、HTML 动画、GIF、PNG、MP4、ANSI、Durdraw `.dur`、Asciimation `.aam`。
-- 界面：中文 Tkinter 桌面 GUI。
+- 界面：中文 Tkinter 桌面 GUI，转换完成后在窗口内列出生成的文件，可一键打开输出目录或所选文件；MP4/ANSI 会标注所需的外部工具（FFmpeg/Chafa）及其检测状态。
 - 命令行：适合批量转换和脚本调用。
 - 预设：清晰还原、游戏着色器、原色鲜艳、自适应混合字符、盲文高精度、文字游戏柔和。
 - 颜色：源色采样、HSV 原色增强、暖色调、黑白灰度。
@@ -113,16 +113,31 @@ Set-Location E:\ASCII动画
 ```powershell
 Set-Location E:\ASCII动画
 .\.venv\Scripts\python.exe -m compileall ascii_oneclick tests
+.\.venv\Scripts\python.exe tests\run_tests.py
+```
+
+`tests\run_tests.py` 会运行冒烟测试和全部 `test_*.py`。也可以单独运行某个文件，例如：
+
+```powershell
 .\.venv\Scripts\python.exe tests\smoke.py
+.\.venv\Scripts\python.exe tests\test_cli.py
+```
+
+查看检测到的外部工具（不需要传入文件）：
+
+```powershell
+.\.venv\Scripts\python.exe -m ascii_oneclick.cli --tools
 ```
 
 项目结构：
 
 - `ascii_oneclick/core.py`：媒体读取、帧采样、字符映射、颜色处理。
 - `ascii_oneclick/exporters.py`：TXT/HTML/GIF/PNG/MP4/DUR/ANSI/AAM 导出。
+- `ascii_oneclick/presets.py`：CLI 与 GUI 共用的预设定义和 `apply_preset()`。
+- `ascii_oneclick/formats.py`：导出格式定义、中文标签、默认选择、工具依赖。
 - `ascii_oneclick/gui.py`：中文桌面 GUI。
 - `ascii_oneclick/cli.py`：命令行入口。
-- `tests/smoke.py`：基础冒烟测试。
+- `tests/`：`smoke.py` 冒烟测试与 `test_*.py` 回归测试，`run_tests.py` 统一入口。
 
 ## 参考与兼容
 
