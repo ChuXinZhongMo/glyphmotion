@@ -32,6 +32,7 @@ CORE_PATCH_FIELDS = (
     "edges",
     "color_grade",
     "supersample",
+    "vibrance",
 )
 
 
@@ -58,6 +59,7 @@ def _patch(
     edges: bool,
     color_grade: str,
     supersample: int,
+    vibrance: float = 0.0,
 ) -> dict[str, Any]:
     return {
         "charset_name": charset_name,
@@ -70,6 +72,7 @@ def _patch(
         "edges": edges,
         "color_grade": color_grade,
         "supersample": supersample,
+        "vibrance": vibrance,
     }
 
 
@@ -197,6 +200,26 @@ PRESETS: tuple[Preset, ...] = (
             edges=False,
             color_grade="vivid",
             supersample=2,
+        ),
+        recommended_width=220,
+        use_adaptive_aspect=True,
+    ),
+    Preset(
+        name="adaptive-wide",
+        label="自适应混合字符（全彩忠实）",
+        description="与原色鲜艳渲染参数相同，不做任何额外色彩增强，颜色完全忠实于素材原色。建议搭配 WebM 全彩格式导出——WebM 使用 yuv444 无色度子采样，GIF/WebM 颜色完全一致；MP4 因 yuv420 色度子采样会损失约 1/3 饱和度。",
+        options_patch=_patch(
+            charset_name="shader",
+            render_mode="adaptive",
+            color=True,
+            clean=True,
+            detail=True,
+            hierarchy=True,
+            separation=False,
+            edges=False,
+            color_grade="vivid",
+            supersample=2,
+            vibrance=0.0,
         ),
         recommended_width=220,
         use_adaptive_aspect=True,

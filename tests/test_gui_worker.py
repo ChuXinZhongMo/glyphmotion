@@ -27,7 +27,7 @@ FIXTURE = ROOT / "tests" / "fixtures" / "gradient.gif"
 
 def _request(input_path: str, output_dir: str) -> ConversionRequest:
     return ConversionRequest(
-        input_path=input_path,
+        input_paths=(input_path,),
         output_dir=output_dir,
         formats=("txt", "png"),
         options=ConvertOptions(columns=32, fps=10, max_frames=3, color=True),
@@ -45,7 +45,7 @@ def _fake_app() -> types.SimpleNamespace:
 def test_request_is_immutable() -> None:
     request = _request("in.gif", "out")
     try:
-        request.input_path = "other"  # type: ignore[misc]
+        request.input_paths = ("other",)  # type: ignore[misc]
     except dataclasses.FrozenInstanceError:
         return
     raise AssertionError("ConversionRequest should be frozen/immutable")

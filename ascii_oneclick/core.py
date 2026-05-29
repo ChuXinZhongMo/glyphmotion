@@ -77,6 +77,10 @@ class ConvertOptions:
     detail: bool = True
     color_grade: str = "source"
     supersample: int = 1
+    # Source-side vibrance: increases the saturation of already-colored glyphs
+    # (skipping near-neutral background pixels) so every export format — GIF,
+    # WebM, MP4 — gets the same wider color. 0.0 disables it.
+    vibrance: float = 0.0
 
     @property
     def charset(self) -> str:
@@ -198,6 +202,30 @@ def _find_executable(
     return None
 
 
+def _vibrance_rgb(rgb: tuple[int, int, int], strength: float) -> tuple[int, int, int]:
+    """Boost the saturation of a colored pixel, leaving neutral pixels alone.
+
+    Works like a "vibrance" control: low-saturation colors are pushed further
+    than already-saturated ones, and near-neutral pixels (the dark background)
+    are skipped so they never pick up a color cast. Operating on the rendered
+    color data means GIF, WebM and MP4 all inherit the same wider color.
+    """
+    r, g, b = rgb
+    hue, sat, value = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    if sat <= 0.05:
+        return rgb
+    sat = min(1.0, sat + (1.0 - sat) * strength)
+    nr, ng, nb = colorsys.hsv_to_rgb(hue, sat, value)
+    return (round(nr * 255), round(ng * 255), round(nb * 255))
+
+
+def apply_vibrance(frame: AsciiFrame, strength: float) -> None:
+    """Apply :func:`_vibrance_rgb` to every color in ``frame`` in place."""
+    frame.colors = [[_vibrance_rgb(c, strength) for c in row] for row in frame.colors]
+    if frame.bg_colors is not None:
+        frame.bg_colors = [[_vibrance_rgb(c, strength) for c in row] for row in frame.bg_colors]
+
+
 def convert_file(
     input_path: str | Path,
     options: ConvertOptions,
@@ -225,7 +253,10 @@ def convert_file(
     for index, (img, duration) in enumerate(zip(images, durations)):
         if should_cancel is not None and should_cancel():
             raise ConversionCancelled()
-        frames.append(image_to_ascii(img, duration, options))
+        frame = image_to_ascii(img, duration, options)
+        if options.color and options.vibrance > 0.0:
+            apply_vibrance(frame, options.vibrance)
+        frames.append(frame)
         if progress is not None:
             progress(index + 1, total)
     rows = len(frames[0].lines)

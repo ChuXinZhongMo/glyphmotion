@@ -53,6 +53,18 @@ def export_many(
         elif fmt == "mp4":
             path = out_dir / f"{stem}.mp4"
             export_mp4(animation, path, color=color, ffmpeg_path=ffmpeg_path)
+        elif fmt == "webm":
+            path = out_dir / f"{stem}.webm"
+            export_webm(animation, path, color=color, ffmpeg_path=ffmpeg_path)
+        elif fmt == "hevc":
+            path = out_dir / f"{stem}_hevc.mp4"
+            export_hevc(animation, path, color=color, ffmpeg_path=ffmpeg_path)
+        elif fmt == "mov":
+            path = out_dir / f"{stem}.mov"
+            export_mov(animation, path, color=color, ffmpeg_path=ffmpeg_path)
+        elif fmt == "av1":
+            path = out_dir / f"{stem}_av1.mp4"
+            export_av1(animation, path, color=color, ffmpeg_path=ffmpeg_path)
         elif fmt == "png":
             path = out_dir / f"{stem}.png"
             export_png(animation, path, color=color)
@@ -304,6 +316,49 @@ def export_gif(animation: AsciiAnimation, path: str | Path, color: bool = True) 
     return Path(path)
 
 
+def _export_video(
+    animation: AsciiAnimation,
+    path: str | Path,
+    color: bool,
+    ffmpeg: str,
+    *,
+    vf: str,
+    video_args: list[str],
+    audio_args: list[str],
+    post_args: list[str],
+) -> Path:
+    source = animation.source
+    keep_audio = source.suffix.lower() in VIDEO_EXTENSIONS and source.exists()
+
+    with tempfile.TemporaryDirectory(prefix="glyphmotion-render-") as temp_dir:
+        temp = Path(temp_dir)
+        for index, frame in enumerate(animation.frames, start=1):
+            image = render_frame(
+                frame.lines, frame.colors,
+                bg_colors=frame.bg_colors, color=color,
+                braille=is_braille_frame(frame),
+            )
+            image.save(temp / f"frame_{index:06d}.png")
+
+        cmd = [
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-framerate", str(animation.fps),
+            "-i", str(temp / "frame_%06d.png"),
+        ]
+        if keep_audio:
+            cmd += ["-i", str(source)]
+        cmd += ["-vf", vf] + video_args
+        if keep_audio:
+            cmd += ["-map", "0:v:0", "-map", "1:a:0?"] + audio_args + ["-shortest"]
+        cmd += post_args + [str(path)]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise RuntimeError(f"FFmpeg failed ({Path(path).suffix}): {detail}")
+    return Path(path)
+
+
 def export_mp4(
     animation: AsciiAnimation,
     path: str | Path,
@@ -313,80 +368,100 @@ def export_mp4(
     ffmpeg = ffmpeg_path or find_ffmpeg()
     if not ffmpeg:
         raise RuntimeError("FFmpeg is required for MP4 export but was not found.")
+    return _export_video(
+        animation, path, color, ffmpeg,
+        vf="pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p",
+        video_args=["-c:v", "libx264", "-crf", "18", "-preset", "slow"],
+        audio_args=["-c:a", "aac", "-b:a", "192k"],
+        post_args=["-movflags", "+faststart"],
+    )
 
-    # When the source is a video it may carry an audio track. Mux that original
-    # audio onto the rendered character-art video so the export keeps its sound.
-    source = animation.source
-    keep_audio = source.suffix.lower() in VIDEO_EXTENSIONS and source.exists()
 
-    with tempfile.TemporaryDirectory(prefix="glyphmotion-render-") as temp_dir:
-        temp = Path(temp_dir)
-        for index, frame in enumerate(animation.frames, start=1):
-            image = render_frame(frame.lines, frame.colors, bg_colors=frame.bg_colors, color=color, braille=is_braille_frame(frame))
-            image.save(temp / f"frame_{index:06d}.png")
+def export_webm(
+    animation: AsciiAnimation,
+    path: str | Path,
+    color: bool = True,
+    ffmpeg_path: str | None = None,
+) -> Path:
+    """Export full-color WebM (VP9 + yuv444) — the widest, most faithful color.
 
-        command = [
-            ffmpeg,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-framerate",
-            str(animation.fps),
-            "-i",
-            str(temp / "frame_%06d.png"),
-        ]
-        if keep_audio:
-            # Second input supplies the audio; "?" keeps it optional so a
-            # silent video still encodes instead of failing.
-            command += ["-i", str(source)]
-        command += [
-            "-vf",
-            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
-            "-c:v",
-            "libx264",
-            "-crf",
-            "18",
-            "-preset",
-            "slow",
-            # Keep the source's full RGB range (0-255) instead of letting
-            # swscale silently compress to limited TV range (16-235), which is
-            # what made the MP4 look darker/duller than the GIF.
-            "-pix_fmt",
-            "yuv420p",
-            "-color_range",
-            "pc",
-            "-colorspace",
-            "bt709",
-            "-color_primaries",
-            "bt709",
-            "-color_trc",
-            "bt709",
-        ]
-        if keep_audio:
-            command += [
-                "-map",
-                "0:v:0",
-                "-map",
-                "1:a:0?",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                # End at the shorter stream so audio is trimmed to the rendered
-                # (frame-limited) video length instead of overrunning it.
-                "-shortest",
-            ]
-        command += [
-            "-movflags",
-            "+faststart",
-            str(path),
-        ]
-        completed = subprocess.run(command, capture_output=True, text=True)
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or completed.stdout.strip()
-            raise RuntimeError(f"FFmpeg failed to encode MP4: {detail}")
-    return Path(path)
+    Unlike MP4's yuv420p, VP9 4:4:4 keeps every pixel's color (no chroma
+    subsampling), so the dense colored glyphs stay as vivid as the GIF instead
+    of being washed out. WebM is less universally supported than MP4 (some
+    older players / platforms reject it), so it is offered alongside MP4 rather
+    than replacing it.
+    """
+    ffmpeg = ffmpeg_path or find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is required for WebM export but was not found.")
+    return _export_video(
+        animation, path, color, ffmpeg,
+        vf="pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        video_args=["-c:v", "libvpx-vp9", "-pix_fmt", "yuv444p",
+                    "-crf", "20", "-b:v", "0", "-row-mt", "1", "-cpu-used", "2"],
+        audio_args=["-c:a", "libopus", "-b:a", "192k"],
+        post_args=[],
+    )
+
+
+def export_hevc(
+    animation: AsciiAnimation,
+    path: str | Path,
+    color: bool = True,
+    ffmpeg_path: str | None = None,
+) -> Path:
+    """Export full-color HEVC/H.265 MP4 (yuv444p). Wider player support than WebM on Windows."""
+    ffmpeg = ffmpeg_path or find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is required for HEVC export but was not found.")
+    return _export_video(
+        animation, path, color, ffmpeg,
+        vf="pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        video_args=["-c:v", "libx265", "-pix_fmt", "yuv444p",
+                    "-crf", "22", "-preset", "medium", "-tag:v", "hvc1"],
+        audio_args=["-c:a", "aac", "-b:a", "192k"],
+        post_args=["-movflags", "+faststart"],
+    )
+
+
+def export_mov(
+    animation: AsciiAnimation,
+    path: str | Path,
+    color: bool = True,
+    ffmpeg_path: str | None = None,
+) -> Path:
+    """Export ProRes 4444 MOV — lossless-quality, full color, professional use."""
+    ffmpeg = ffmpeg_path or find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is required for MOV export but was not found.")
+    return _export_video(
+        animation, path, color, ffmpeg,
+        vf="pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        video_args=["-c:v", "prores_ks", "-profile:v", "4444",
+                    "-pix_fmt", "yuva444p10le", "-q:v", "11"],
+        audio_args=["-c:a", "aac", "-b:a", "192k"],
+        post_args=[],
+    )
+
+
+def export_av1(
+    animation: AsciiAnimation,
+    path: str | Path,
+    color: bool = True,
+    ffmpeg_path: str | None = None,
+) -> Path:
+    """Export AV1 MP4 (yuv444p10le via SVT-AV1) — best compression, full color."""
+    ffmpeg = ffmpeg_path or find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is required for AV1 export but was not found.")
+    return _export_video(
+        animation, path, color, ffmpeg,
+        vf="pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        video_args=["-c:v", "libsvtav1", "-pix_fmt", "yuv444p10le",
+                    "-crf", "30", "-b:v", "0", "-svtav1-params", "tune=0"],
+        audio_args=["-c:a", "aac", "-b:a", "192k"],
+        post_args=["-movflags", "+faststart"],
+    )
 
 
 def export_ansi(

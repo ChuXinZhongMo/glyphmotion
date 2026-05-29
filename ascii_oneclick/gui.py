@@ -29,6 +29,13 @@ from .formats import DEFAULT_FORMAT_NAMES, FORMAT_LABELS, FORMATS_BY_NAME, OUTPU
 from .presets import PRESETS, PRESETS_BY_NAME, Preset
 from .theme import apply_theme
 
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD as _TkDnD
+    _TkBase: type = _TkDnD.Tk
+except Exception:
+    DND_FILES = None  # type: ignore[assignment]
+    _TkBase = tk.Tk
+
 
 CHARSET_LABELS = {
     "default": "默认字符（推荐）",
@@ -68,7 +75,7 @@ class ConversionRequest:
     background worker. The worker must not read any Tkinter state.
     """
 
-    input_path: str
+    input_paths: tuple[str, ...]
     output_dir: str
     formats: tuple[str, ...]
     options: ConvertOptions
@@ -107,7 +114,7 @@ ConversionMessage = (
 )
 
 
-class GlyphMotionApp(tk.Tk):
+class GlyphMotionApp(_TkBase):  # type: ignore[misc]
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_NAME)
@@ -128,7 +135,7 @@ class GlyphMotionApp(tk.Tk):
         self._preview_font_sizes = (8, 11, 14)
         self._preview_zoom = 0
 
-        self.input_var = tk.StringVar()
+        self._input_files: list[str] = []
         self.output_var = tk.StringVar(value=str(Path.cwd() / "输出"))
         self.width_var = tk.IntVar(value=100)
         self.aspect_var = tk.DoubleVar(value=round(default_char_aspect(), 2))
@@ -147,6 +154,7 @@ class GlyphMotionApp(tk.Tk):
         self.detail_var = tk.BooleanVar(value=True)
         self.color_grade = "source"
         self.supersample = 1
+        self.vibrance = 0.0
         self.format_vars = {
             fmt.name: tk.BooleanVar(value=fmt.default) for fmt in OUTPUT_FORMATS
         }
@@ -238,15 +246,56 @@ class GlyphMotionApp(tk.Tk):
         section = self._make_section(parent, "文件 / SOURCE", indent=0)
         section.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         file_frame = section.content
-        file_frame.columnconfigure(1, weight=1)
+        file_frame.columnconfigure(0, weight=1)
 
-        ttk.Label(file_frame, text="输入", style="Page.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        ttk.Entry(file_frame, textvariable=self.input_var).grid(row=0, column=1, sticky="ew")
-        ttk.Button(file_frame, text="选择文件", command=self._choose_input).grid(row=0, column=2, padx=(8, 0))
+        # --- input list ---
+        list_frame = ttk.Frame(file_frame, style="App.TFrame")
+        list_frame.grid(row=0, column=0, columnspan=3, sticky="ew")
+        list_frame.columnconfigure(0, weight=1)
+        ttk.Label(list_frame, text="输入", style="Page.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 4))
+        self.file_listbox = tk.Listbox(
+            list_frame,
+            height=4,
+            activestyle="none",
+            bg=self.theme.input_bg,
+            fg=self.theme.fg,
+            selectbackground=self.theme.accent,
+            selectforeground="#ffffff",
+            highlightthickness=1,
+            highlightbackground=self.theme.border,
+            highlightcolor=self.theme.accent,
+            borderwidth=0,
+            relief="flat",
+            font=(self.theme.mono_font, 9),
+        )
+        self.file_listbox.grid(row=1, column=0, sticky="ew")
+        sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
+        self.file_listbox.configure(yscrollcommand=sb.set)
+        sb.grid(row=1, column=1, sticky="ns")
 
-        ttk.Label(file_frame, text="输出", style="Page.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
-        ttk.Entry(file_frame, textvariable=self.output_var).grid(row=1, column=1, sticky="ew", pady=(8, 0))
-        ttk.Button(file_frame, text="选择目录", command=self._choose_output).grid(row=1, column=2, padx=(8, 0), pady=(8, 0))
+        if DND_FILES:
+            self.file_listbox.drop_target_register(DND_FILES)
+            self.file_listbox.dnd_bind("<<Drop>>", self._on_drop)
+            hint = "支持拖拽"
+        else:
+            hint = ""
+
+        btn_row = ttk.Frame(list_frame, style="App.TFrame")
+        btn_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Button(btn_row, text="+ 添加文件", command=self._choose_input).grid(row=0, column=0)
+        ttk.Button(btn_row, text="移除所选", command=self._remove_input_file).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(btn_row, text="清空", command=self._clear_input_files).grid(row=0, column=2, padx=(8, 0))
+        if hint:
+            ttk.Label(btn_row, text=hint, style="Page.TLabel").grid(row=0, column=3, padx=(12, 0))
+
+        # --- output dir ---
+        out_row = ttk.Frame(file_frame, style="App.TFrame")
+        out_row.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        out_row.columnconfigure(1, weight=1)
+        ttk.Label(out_row, text="输出", style="Page.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Entry(out_row, textvariable=self.output_var).grid(row=0, column=1, sticky="ew")
+        ttk.Button(out_row, text="选择目录", command=self._choose_output).grid(row=0, column=2, padx=(8, 0))
 
     def _build_control_panel(self, parent: ttk.Frame) -> None:
         notebook = ttk.Notebook(parent)
@@ -649,16 +698,47 @@ class GlyphMotionApp(tk.Tk):
             variable.set(False)
 
     def _choose_input(self) -> None:
-        path = filedialog.askopenfilename(
+        paths = filedialog.askopenfilenames(
             title="选择图片、GIF 或视频",
             filetypes=[
                 ("媒体文件", "*.png *.jpg *.jpeg *.gif *.webp *.bmp *.mp4 *.mov *.mkv *.avi *.wmv *.webm"),
                 ("所有文件", "*.*"),
             ],
         )
-        if path:
-            self.input_var.set(path)
-            self.output_var.set(str(Path(path).parent / "ASCII输出"))
+        if paths:
+            self._add_input_files(list(paths))
+
+    def _add_input_files(self, paths: list[str]) -> None:
+        existing = set(self._input_files)
+        for p in paths:
+            if p not in existing:
+                self._input_files.append(p)
+                existing.add(p)
+                self.file_listbox.insert(tk.END, Path(p).name)
+        if self._input_files and not self.output_var.get().strip():
+            self.output_var.set(str(Path(self._input_files[0]).parent / "ASCII输出"))
+
+    def _remove_input_file(self) -> None:
+        sel = list(self.file_listbox.curselection())
+        for idx in reversed(sel):
+            self.file_listbox.delete(idx)
+            del self._input_files[idx]
+
+    def _clear_input_files(self) -> None:
+        self._input_files.clear()
+        self.file_listbox.delete(0, tk.END)
+
+    def _on_drop(self, event: object) -> None:
+        raw = getattr(event, "data", "")
+        try:
+            paths = self.tk.splitlist(raw)
+        except Exception:
+            paths = [raw]
+        media_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+                      ".mp4", ".mov", ".mkv", ".avi", ".wmv", ".webm"}
+        valid = [p for p in paths if Path(p).suffix.lower() in media_exts]
+        if valid:
+            self._add_input_files(valid)
 
     def _on_preset_changed(self, *_args: object) -> None:
         name = PRESET_NAME_BY_LABEL.get(self.preset_var.get())
@@ -679,6 +759,7 @@ class GlyphMotionApp(tk.Tk):
         self.color_var.set(patch["color"])
         self.color_grade = patch["color_grade"]
         self.supersample = patch["supersample"]
+        self.vibrance = patch.get("vibrance", 0.0)
         self.hierarchy_var.set(patch["hierarchy"])
         self.separation_var.set(patch["separation"])
         self.detail_var.set(patch["detail"])
@@ -704,8 +785,8 @@ class GlyphMotionApp(tk.Tk):
         if self._conversion_running:
             # Guard against a second conversion while one is in flight.
             return
-        if not self.input_var.get().strip():
-            messagebox.showerror("缺少输入文件", "请先选择一个图片、GIF 或视频文件。")
+        if not self._input_files:
+            messagebox.showerror("缺少输入文件", "请先添加至少一个图片、GIF 或视频文件。")
             return
         formats = self._selected_formats()
         if not formats:
@@ -767,9 +848,10 @@ class GlyphMotionApp(tk.Tk):
             detail=self.detail_var.get(),
             color_grade=self.color_grade,
             supersample=self.supersample,
+            vibrance=self.vibrance,
         )
         return ConversionRequest(
-            input_path=self.input_var.get().strip(),
+            input_paths=tuple(self._input_files),
             output_dir=self.output_var.get(),
             formats=tuple(formats),
             options=options,
@@ -803,26 +885,52 @@ class GlyphMotionApp(tk.Tk):
             )
 
         try:
-            self.work_queue.put(ConversionProgress("● 解码中 / DECODING…", 0.02))
-            animation = convert_file(
-                request.input_path,
-                request.options,
-                ffmpeg_path=request.ffmpeg_path,
-                progress=on_frame,
-                should_cancel=should_cancel,
-            )
-            outputs = export_many(
-                animation,
-                request.output_dir,
-                list(request.formats),
-                color=request.color,
-                ffmpeg_path=request.ffmpeg_path,
-                chafa_path=request.chafa_path,
-                progress=on_export,
-                should_cancel=should_cancel,
-            )
-            preview = "\n".join(animation.frames[0].lines)
-            self.work_queue.put(ConversionSuccess(animation=animation, outputs=outputs, preview=preview))
+            n_files = len(request.input_paths)
+            all_outputs: list[Path] = []
+            last_animation = None
+
+            for file_idx, input_path in enumerate(request.input_paths):
+                file_base = file_idx / n_files
+                file_span = 1.0 / n_files
+                fname = Path(input_path).name
+
+                def on_frame(done: int, total: int, _b: float = file_base, _s: float = file_span) -> None:
+                    frac = _b + _s * (0.05 + 0.73 * (done / max(1, total)))
+                    self.work_queue.put(ConversionProgress(
+                        f"● [{file_idx + 1}/{n_files}] {fname} — 渲染帧 {done}/{total}", frac))
+
+                def on_export(done: int, total: int, name: str,
+                              _b: float = file_base, _s: float = file_span) -> None:
+                    frac = _b + _s * (0.78 + 0.22 * (done / max(1, total)))
+                    self.work_queue.put(ConversionProgress(
+                        f"● [{file_idx + 1}/{n_files}] {fname} — 导出 {name.upper()} {done}/{total}", frac))
+
+                self.work_queue.put(ConversionProgress(
+                    f"● [{file_idx + 1}/{n_files}] {fname} — 解码中…", file_base + file_span * 0.02))
+
+                animation = convert_file(
+                    input_path,
+                    request.options,
+                    ffmpeg_path=request.ffmpeg_path,
+                    progress=on_frame,
+                    should_cancel=should_cancel,
+                )
+                outputs = export_many(
+                    animation,
+                    request.output_dir,
+                    list(request.formats),
+                    color=request.color,
+                    ffmpeg_path=request.ffmpeg_path,
+                    chafa_path=request.chafa_path,
+                    progress=on_export,
+                    should_cancel=should_cancel,
+                )
+                all_outputs.extend(outputs)
+                last_animation = animation
+
+            preview = "\n".join(last_animation.frames[0].lines) if last_animation else ""
+            self.work_queue.put(ConversionSuccess(
+                animation=last_animation, outputs=all_outputs, preview=preview))
         except ConversionCancelledError:
             self.work_queue.put(ConversionCancelled())
         except (ConversionError, OSError, RuntimeError, ValueError) as exc:
