@@ -2,4 +2,4 @@
 
 __all__ = ["__version__", "APP_NAME"]
 APP_NAME = "字影工坊 GlyphMotion"
-__version__ = "0.4.0"
+__version__ = "0.4.1"

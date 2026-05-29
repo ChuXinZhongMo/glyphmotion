@@ -81,6 +81,7 @@ class ConvertOptions:
     # (skipping near-neutral background pixels) so every export format — GIF,
     # WebM, MP4 — gets the same wider color. 0.0 disables it.
     vibrance: float = 0.0
+    dither: str = "none"
 
     @property
     def charset(self) -> str:
@@ -200,6 +201,89 @@ def _find_executable(
         if candidate.exists():
             return str(candidate)
     return None
+
+
+def apply_dither(gray: Image.Image, n_levels: int, algorithm: str) -> Image.Image:
+    """Apply a dithering algorithm to a grayscale image before character mapping.
+
+    Distributes quantisation error to neighbouring pixels so the overall
+    perceived brightness matches the original even though each pixel is
+    mapped to a coarser level. This preserves shadow and mid-tone detail
+    that hard-quantisation would otherwise flatten into a uniform block.
+
+    Algorithms
+    ----------
+    floyd-steinberg : Classic error diffusion — smoothest gradients.
+    atkinson        : Distributes only half the error (Apple Mac style) —
+                      higher contrast, more visible detail in shadows.
+    bayer           : Ordered 4×4 threshold matrix — deterministic pattern,
+                      no error propagation, fastest.
+    """
+    if algorithm == "none" or n_levels < 2:
+        return gray
+
+    w, h = gray.size
+    step = 255.0 / (n_levels - 1)
+
+    def _quantize(v: float) -> float:
+        return round(max(0.0, min(255.0, v)) / step) * step
+
+    raw = list(gray.getdata())
+    rows = [list(raw[y * w:(y + 1) * w]) for y in range(h)]
+
+    if algorithm == "bayer":
+        bayer4 = [
+            [0, 8, 2, 10],
+            [12, 4, 14, 6],
+            [3, 11, 1, 9],
+            [15, 7, 13, 5],
+        ]
+        for y in range(h):
+            for x in range(w):
+                offset = (bayer4[y % 4][x % 4] / 16.0 - 0.5) * step
+                rows[y][x] = int(_quantize(rows[y][x] + offset))
+
+    elif algorithm == "floyd-steinberg":
+        buf = [[float(v) for v in row] for row in rows]
+        for y in range(h):
+            for x in range(w):
+                old = buf[y][x]
+                new = _quantize(old)
+                buf[y][x] = new
+                err = old - new
+                if x + 1 < w:
+                    buf[y][x + 1] += err * 7 / 16
+                if y + 1 < h:
+                    if x - 1 >= 0:
+                        buf[y + 1][x - 1] += err * 3 / 16
+                    buf[y + 1][x] += err * 5 / 16
+                    if x + 1 < w:
+                        buf[y + 1][x + 1] += err * 1 / 16
+        rows = [[int(max(0, min(255, v))) for v in row] for row in buf]
+
+    elif algorithm == "atkinson":
+        buf = [[float(v) for v in row] for row in rows]
+        for y in range(h):
+            for x in range(w):
+                old = buf[y][x]
+                new = _quantize(old)
+                buf[y][x] = new
+                err = (old - new) / 8.0
+                for nx, ny in [
+                    (x + 1, y), (x + 2, y),
+                    (x - 1, y + 1), (x, y + 1), (x + 1, y + 1),
+                    (x, y + 2),
+                ]:
+                    if 0 <= nx < w and 0 <= ny < h:
+                        buf[ny][nx] += err
+        rows = [[int(max(0, min(255, v))) for v in row] for row in buf]
+
+    out = Image.new("L", (w, h))
+    flat: list[int] = []
+    for row in rows:
+        flat.extend(row)
+    out.putdata(flat)
+    return out
 
 
 def _vibrance_rgb(rgb: tuple[int, int, int], strength: float) -> tuple[int, int, int]:
@@ -366,6 +450,8 @@ def image_to_ascii(image: Image.Image, duration: float, options: ConvertOptions)
         gray = ImageOps.autocontrast(gray, cutoff=cutoff)
     if options.clean:
         gray = gray.filter(ImageFilter.MedianFilter(size=3))
+    if options.dither != "none":
+        gray = apply_dither(gray, n_levels=max(2, len(options.charset)), algorithm=options.dither)
     saliency = build_saliency_map(gray) if options.hierarchy else None
     separators = build_separator_map(gray, threshold=options.separation_threshold) if options.separation else None
     charset = options.charset[::-1] if options.invert else options.charset

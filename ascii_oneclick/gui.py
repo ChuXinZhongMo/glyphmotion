@@ -59,6 +59,14 @@ RENDER_MODE_LABELS = {
 }
 RENDER_MODE_NAMES_BY_LABEL = {label: name for name, label in RENDER_MODE_LABELS.items()}
 
+DITHER_LABELS: dict[str, str] = {
+    "none": "无抖动",
+    "floyd-steinberg": "Floyd-Steinberg（平滑）",
+    "atkinson": "Atkinson（细节多）",
+    "bayer": "Bayer（有序）",
+}
+DITHER_NAMES_BY_LABEL = {v: k for k, v in DITHER_LABELS.items()}
+
 # Preset labels come from the shared preset definitions; "custom" is GUI-only
 # and means "leave the manually tuned controls as they are".
 CUSTOM_PRESET_LABEL = "自定义"
@@ -155,6 +163,7 @@ class GlyphMotionApp(_TkBase):  # type: ignore[misc]
         self.color_grade = "source"
         self.supersample = 1
         self.vibrance = 0.0
+        self.dither_var = tk.StringVar(value=DITHER_LABELS["none"])
         self.format_vars = {
             fmt.name: tk.BooleanVar(value=fmt.default) for fmt in OUTPUT_FORMATS
         }
@@ -441,6 +450,15 @@ class GlyphMotionApp(_TkBase):  # type: ignore[misc]
             textvariable=self.render_mode_var,
             state="readonly",
         ).grid(row=1, column=1, sticky="ew", pady=(8, 0))
+
+        ttk.Label(render_frame, text="抖动", style="Page.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
+        ttk.Combobox(
+            render_frame,
+            values=list(DITHER_LABELS.values()),
+            textvariable=self.dither_var,
+            state="readonly",
+            width=28,
+        ).grid(row=2, column=1, sticky="ew", pady=(8, 0))
 
         options_section = self._make_section(parent, "处理选项 / OPTIONS")
         options_section.grid(row=4, column=0, sticky="ew", pady=(16, 0))
@@ -849,6 +867,7 @@ class GlyphMotionApp(_TkBase):  # type: ignore[misc]
             color_grade=self.color_grade,
             supersample=self.supersample,
             vibrance=self.vibrance,
+            dither=DITHER_NAMES_BY_LABEL.get(self.dither_var.get(), "none"),
         )
         return ConversionRequest(
             input_paths=tuple(self._input_files),
