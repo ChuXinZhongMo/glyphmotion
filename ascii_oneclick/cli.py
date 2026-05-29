@@ -16,9 +16,11 @@ from .core import (
     find_ffmpeg,
 )
 from .exporters import export_many
+from .formats import DEFAULT_FORMATS_CLI
+from .presets import PRESET_NAMES, apply_preset
 
 
-DEFAULT_FORMATS = "txt,html,gif,png,dur,asciimation"
+DEFAULT_FORMATS = DEFAULT_FORMATS_CLI
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,19 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--preset",
-        choices=[
-            "restore",
-            "shader-mono",
-            "shader-color",
-            "shader-color-hd",
-            "adaptive-mono",
-            "adaptive-color",
-            "adaptive-vivid",
-            "braille-mono",
-            "braille-color",
-            "shader-warm",
-            "soft",
-        ],
+        choices=PRESET_NAMES,
         default=None,
         help="Apply a predefined look. shader-mono and shader-color are separate presets.",
     )
@@ -113,153 +103,36 @@ def build_options(args: argparse.Namespace) -> ConvertOptions:
     Extracted from main() so preset/option mapping can be unit tested without
     running an actual conversion.
     """
-    preset = "shader-color" if args.shader_color else args.preset
-    charset_name = args.charset
-    render_mode = args.mode
-    mono = args.mono
-    hierarchy = not args.no_hierarchy
-    separation = not args.no_separation
-    detail = not args.no_detail
-    clean = args.clean
-    edges = not args.no_edges
-    color_grade = "source"
-    supersample = max(1, args.supersample)
-
-    if preset == "restore":
-        charset_name = "restore"
-        render_mode = "ascii"
-        mono = True
-        hierarchy = True
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-    elif preset == "shader-mono":
-        charset_name = "shader"
-        render_mode = "ascii"
-        mono = True
-        hierarchy = False
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-    elif preset == "shader-color":
-        charset_name = "shader"
-        render_mode = "ascii"
-        mono = False
-        hierarchy = False
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-        color_grade = "source"
-        supersample = max(supersample, 1)
-    elif preset == "shader-color-hd":
-        charset_name = "shader"
-        render_mode = "ascii"
-        mono = False
-        hierarchy = False
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-        color_grade = "source"
-        supersample = max(supersample, 2)
-    elif preset == "adaptive-mono":
-        charset_name = "shader"
-        render_mode = "adaptive"
-        mono = True
-        hierarchy = True
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-        color_grade = "source"
-        supersample = max(supersample, 2)
-    elif preset == "adaptive-color":
-        charset_name = "shader"
-        render_mode = "adaptive"
-        mono = False
-        hierarchy = True
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-        color_grade = "source"
-        supersample = max(supersample, 2)
-    elif preset == "adaptive-vivid":
-        charset_name = "shader"
-        render_mode = "adaptive"
-        mono = False
-        hierarchy = True
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-        color_grade = "vivid"
-        supersample = max(supersample, 2)
-    elif preset == "braille-mono":
-        charset_name = "shader"
-        render_mode = "braille"
-        mono = True
-        hierarchy = False
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-    elif preset == "braille-color":
-        charset_name = "shader"
-        render_mode = "braille"
-        mono = False
-        hierarchy = False
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-        color_grade = "source"
-    elif preset == "shader-warm":
-        charset_name = "shader"
-        render_mode = "ascii"
-        mono = False
-        hierarchy = False
-        separation = False
-        detail = True
-        clean = True
-        edges = False
-        color_grade = "warm"
-    elif preset == "soft":
-        charset_name = "soft"
-        render_mode = "ascii"
-        mono = True
-        hierarchy = True
-        separation = False
-        detail = False
-        clean = True
-        edges = False
-
-    return ConvertOptions(
+    base = ConvertOptions(
         columns=args.width,
         fps=args.fps,
-        charset_name=charset_name,
-        render_mode=render_mode,
+        charset_name=args.charset,
+        render_mode=args.mode,
         invert=args.invert,
-        color=not mono,
+        color=not args.mono,
         max_frames=args.max_frames,
         start_time=args.start,
         duration=args.duration,
         char_aspect=args.aspect if args.aspect is not None else default_char_aspect(),
         autocontrast=not args.no_autocontrast,
-        clean=clean,
-        edges=edges,
+        clean=args.clean,
+        edges=not args.no_edges,
         edge_threshold=args.edge_threshold,
-        hierarchy=hierarchy,
+        hierarchy=not args.no_hierarchy,
         hierarchy_threshold=args.hierarchy_threshold,
-        separation=separation,
+        separation=not args.no_separation,
         separation_threshold=args.separation_threshold,
-        detail=detail,
-        color_grade=color_grade,
-        supersample=supersample,
+        detail=not args.no_detail,
+        color_grade="source",
+        supersample=max(1, args.supersample),
     )
+
+    preset = "shader-color" if args.shader_color else args.preset
+    if preset:
+        # The preset owns the core render fields (charset/mode/color/...);
+        # everything else (size, fps, thresholds, aspect) stays from args.
+        base = apply_preset(base, preset)
+    return base
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -18,18 +18,9 @@ from .core import (
     find_ffmpeg,
 )
 from .exporters import export_many
+from .formats import DEFAULT_FORMAT_NAMES, FORMAT_LABELS, OUTPUT_FORMATS
+from .presets import PRESETS, PRESETS_BY_NAME, Preset
 
-
-FORMAT_LABELS = {
-    "txt": "TXT 文本",
-    "html": "HTML 动画网页",
-    "gif": "GIF 动图",
-    "png": "PNG 首帧图片",
-    "mp4": "MP4 视频",
-    "dur": "Durdraw 工程 (.dur)",
-    "ansi": "ANSI 终端动画",
-    "asciimation": "Asciimation 文本 (.aam)",
-}
 
 CHARSET_LABELS = {
     "default": "默认字符（推荐）",
@@ -53,21 +44,12 @@ RENDER_MODE_LABELS = {
 }
 RENDER_MODE_NAMES_BY_LABEL = {label: name for name, label in RENDER_MODE_LABELS.items()}
 
-PRESET_LABELS = {
-    "restore": "清晰还原（黑白）",
-    "shader_mono": "游戏着色器（黑白）",
-    "shader_color": "游戏着色器（原色彩色）",
-    "shader_color_hd": "游戏着色器（原色高清）",
-    "adaptive_mono": "自适应混合字符（黑白）",
-    "adaptive_color": "自适应混合字符（原色彩色）",
-    "adaptive_vivid": "自适应混合字符（原色鲜艳）",
-    "braille_mono": "盲文高精度（黑白）",
-    "braille_color": "盲文高精度（彩色）",
-    "shader_warm": "游戏着色器（暖色彩色）",
-    "soft": "文字游戏柔和（黑白）",
-    "custom": "自定义",
-}
-PRESET_NAMES_BY_LABEL = {label: name for name, label in PRESET_LABELS.items()}
+# Preset labels come from the shared preset definitions; "custom" is GUI-only
+# and means "leave the manually tuned controls as they are".
+CUSTOM_PRESET_LABEL = "自定义"
+PRESET_COMBO_VALUES = [preset.label for preset in PRESETS] + [CUSTOM_PRESET_LABEL]
+PRESET_NAME_BY_LABEL = {preset.label: preset.name for preset in PRESETS}
+PRESET_LABEL_BY_NAME = {preset.name: preset.label for preset in PRESETS}
 
 
 class GlyphMotionApp(tk.Tk):
@@ -84,7 +66,7 @@ class GlyphMotionApp(tk.Tk):
         self.aspect_var = tk.DoubleVar(value=round(default_char_aspect(), 2))
         self.fps_var = tk.DoubleVar(value=12.0)
         self.max_frames_var = tk.IntVar(value=240)
-        self.preset_var = tk.StringVar(value=PRESET_LABELS["restore"])
+        self.preset_var = tk.StringVar(value=PRESET_LABEL_BY_NAME["restore"])
         self.charset_var = tk.StringVar(value=CHARSET_LABELS["restore"])
         self.render_mode_var = tk.StringVar(value=RENDER_MODE_LABELS["ascii"])
         self.color_var = tk.BooleanVar(value=False)
@@ -98,14 +80,7 @@ class GlyphMotionApp(tk.Tk):
         self.color_grade = "source"
         self.supersample = 1
         self.format_vars = {
-            "txt": tk.BooleanVar(value=True),
-            "html": tk.BooleanVar(value=True),
-            "gif": tk.BooleanVar(value=True),
-            "png": tk.BooleanVar(value=True),
-            "mp4": tk.BooleanVar(value=False),
-            "dur": tk.BooleanVar(value=True),
-            "ansi": tk.BooleanVar(value=False),
-            "asciimation": tk.BooleanVar(value=True),
+            fmt.name: tk.BooleanVar(value=fmt.default) for fmt in OUTPUT_FORMATS
         }
 
         self._build_ui()
@@ -204,7 +179,7 @@ class GlyphMotionApp(tk.Tk):
         ttk.Label(preset_frame, text="效果").grid(row=0, column=0, sticky="w", padx=(0, 8))
         preset_combo = ttk.Combobox(
             preset_frame,
-            values=list(PRESET_LABELS.values()),
+            values=PRESET_COMBO_VALUES,
             textvariable=self.preset_var,
             width=28,
             state="readonly",
@@ -327,7 +302,7 @@ class GlyphMotionApp(tk.Tk):
         ).grid(row=row, column=column + 1, sticky="ew", pady=4, padx=(0, 12))
 
     def _select_common_formats(self) -> None:
-        common = {"txt", "html", "gif", "png", "dur", "asciimation"}
+        common = set(DEFAULT_FORMAT_NAMES)
         for name, variable in self.format_vars.items():
             variable.set(name in common)
 
@@ -352,179 +327,36 @@ class GlyphMotionApp(tk.Tk):
             self.output_var.set(str(Path(path).parent / "ASCII输出"))
 
     def _on_preset_changed(self, *_args: object) -> None:
-        preset = PRESET_NAMES_BY_LABEL.get(self.preset_var.get(), "custom")
-        if preset == "custom":
+        name = PRESET_NAME_BY_LABEL.get(self.preset_var.get())
+        if name is None:  # "custom" or an unknown label: keep manual settings.
             return
-        if preset == "restore":
-            self._apply_render_settings(
-                charset="restore",
-                color=False,
-                supersample=1,
-                hierarchy=True,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "shader_mono":
-            self._apply_render_settings(
-                charset="shader",
-                color=False,
-                supersample=1,
-                hierarchy=False,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "shader_color":
-            self._apply_render_settings(
-                charset="shader",
-                color=True,
-                color_grade="source",
-                supersample=1,
-                hierarchy=False,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "shader_color_hd":
-            self.width_var.set(max(self.width_var.get(), 220))
-            self.max_frames_var.set(min(self.max_frames_var.get(), 240))
-            self._apply_render_settings(
-                charset="shader",
-                color=True,
-                color_grade="source",
-                supersample=2,
-                hierarchy=False,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "adaptive_mono":
-            self.width_var.set(max(self.width_var.get(), 180))
-            self.aspect_var.set(round(adaptive_char_aspect(), 2))
-            self._apply_render_settings(
-                charset="shader",
-                render_mode="adaptive",
-                color=False,
-                color_grade="source",
-                supersample=2,
-                hierarchy=True,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "adaptive_color":
-            self.width_var.set(max(self.width_var.get(), 220))
-            self.aspect_var.set(round(adaptive_char_aspect(), 2))
-            self._apply_render_settings(
-                charset="shader",
-                render_mode="adaptive",
-                color=True,
-                color_grade="source",
-                supersample=2,
-                hierarchy=True,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "adaptive_vivid":
-            self.width_var.set(max(self.width_var.get(), 220))
-            self.aspect_var.set(round(adaptive_char_aspect(), 2))
-            self._apply_render_settings(
-                charset="shader",
-                render_mode="adaptive",
-                color=True,
-                color_grade="vivid",
-                supersample=2,
-                hierarchy=True,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "braille_mono":
-            self.width_var.set(max(self.width_var.get(), 160))
-            self._apply_render_settings(
-                charset="shader",
-                render_mode="braille",
-                color=False,
-                color_grade="source",
-                supersample=1,
-                hierarchy=False,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "braille_color":
-            self.width_var.set(max(self.width_var.get(), 160))
-            self._apply_render_settings(
-                charset="shader",
-                render_mode="braille",
-                color=True,
-                color_grade="source",
-                supersample=1,
-                hierarchy=False,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "shader_warm":
-            self._apply_render_settings(
-                charset="shader",
-                color=True,
-                color_grade="warm",
-                supersample=1,
-                hierarchy=False,
-                separation=False,
-                detail=True,
-                clean=True,
-                edges=False,
-            )
-        elif preset == "soft":
-            self._apply_render_settings(
-                charset="soft",
-                color=False,
-                color_grade="source",
-                supersample=1,
-                hierarchy=True,
-                separation=False,
-                detail=False,
-                clean=True,
-                edges=False,
-            )
+        self._apply_preset(PRESETS_BY_NAME[name])
 
-    def _apply_render_settings(
-        self,
-        *,
-        charset: str,
-        color: bool,
-        hierarchy: bool,
-        separation: bool,
-        detail: bool,
-        clean: bool,
-        edges: bool,
-        render_mode: str = "ascii",
-        color_grade: str = "source",
-        supersample: int = 1,
-    ) -> None:
-        self.charset_var.set(CHARSET_LABELS[charset])
-        self.render_mode_var.set(RENDER_MODE_LABELS[render_mode])
-        self.color_var.set(color)
-        self.color_grade = color_grade
-        self.supersample = supersample
-        self.hierarchy_var.set(hierarchy)
-        self.separation_var.set(separation)
-        self.detail_var.set(detail)
-        self.clean_var.set(clean)
-        self.edges_var.set(edges)
+    def _apply_preset(self, preset: Preset) -> None:
+        """Apply a shared Preset to the GUI controls.
+
+        Core render fields come from ``preset.options_patch`` (the same patch
+        the CLI applies), so the two front-ends stay in sync. ``recommended_*``
+        and ``use_adaptive_aspect`` are GUI-only sizing hints.
+        """
+        patch = preset.options_patch
+        self.charset_var.set(CHARSET_LABELS[patch["charset_name"]])
+        self.render_mode_var.set(RENDER_MODE_LABELS[patch["render_mode"]])
+        self.color_var.set(patch["color"])
+        self.color_grade = patch["color_grade"]
+        self.supersample = patch["supersample"]
+        self.hierarchy_var.set(patch["hierarchy"])
+        self.separation_var.set(patch["separation"])
+        self.detail_var.set(patch["detail"])
+        self.clean_var.set(patch["clean"])
+        self.edges_var.set(patch["edges"])
+
+        if preset.recommended_width:
+            self.width_var.set(max(self.width_var.get(), preset.recommended_width))
+        if preset.recommended_max_frames:
+            self.max_frames_var.set(min(self.max_frames_var.get(), preset.recommended_max_frames))
+        if preset.use_adaptive_aspect:
+            self.aspect_var.set(round(adaptive_char_aspect(), 2))
 
     def _choose_output(self) -> None:
         path = filedialog.askdirectory(title="选择输出目录")
