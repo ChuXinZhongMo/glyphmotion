@@ -25,6 +25,7 @@ from .core import (
 from .exporters import export_many
 from .formats import DEFAULT_FORMAT_NAMES, FORMAT_LABELS, FORMATS_BY_NAME, OUTPUT_FORMATS
 from .presets import PRESETS, PRESETS_BY_NAME, Preset
+from .theme import apply_theme
 
 
 CHARSET_LABELS = {
@@ -133,7 +134,7 @@ class GlyphMotionApp(tk.Tk):
         self.after(100, self._poll_queue)
 
     def _build_ui(self) -> None:
-        self._configure_style()
+        self.theme = apply_theme(self)
         self.geometry("1180x760")
         self.minsize(1040, 640)
         self.columnconfigure(0, weight=1)
@@ -142,36 +143,43 @@ class GlyphMotionApp(tk.Tk):
         shell = ttk.Frame(self, padding=12, style="App.TFrame")
         shell.grid(row=0, column=0, sticky="nsew")
         shell.columnconfigure(0, weight=1)
-        shell.rowconfigure(1, weight=1)
+        shell.rowconfigure(2, weight=1)
 
+        self._build_header(shell)
         self._build_file_panel(shell)
         body = ttk.PanedWindow(shell, orient=tk.HORIZONTAL)
-        body.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+        body.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
 
         controls = ttk.Frame(body, padding=(0, 0, 10, 0), style="App.TFrame")
         controls.columnconfigure(0, weight=1)
-        preview_frame = ttk.LabelFrame(body, text="预览", padding=10)
+        preview_frame = ttk.LabelFrame(body, text="预览 / PREVIEW", padding=10)
         body.add(controls, weight=0)
         body.add(preview_frame, weight=1)
 
         self._build_control_panel(controls)
         self._build_preview_panel(preview_frame)
 
-    def _configure_style(self) -> None:
-        style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        style.configure("App.TFrame", background="#f3f4f6")
-        style.configure("TLabelframe", padding=8)
-        style.configure("TLabelframe.Label", font=("Microsoft YaHei UI", 10, "bold"))
-        style.configure("Primary.TButton", font=("Microsoft YaHei UI", 10, "bold"), padding=(10, 6))
-        style.configure("Status.TLabel", foreground="#4b5563")
+    def _build_header(self, parent: ttk.Frame) -> None:
+        header = ttk.Frame(parent, style="Header.TFrame")
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(1, weight=1)
+
+        ttk.Label(header, text="◆ GLYPHMOTION", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            header,
+            text="字影工坊 · CHARACTER ANIMATION STUDIO",
+            style="Subtitle.TLabel",
+        ).grid(row=0, column=1, sticky="e", pady=(8, 0))
+
+        # Glowing accent rule beneath the title bar.
+        rule = tk.Frame(header, height=2, bg=self.theme.accent, bd=0, highlightthickness=0)
+        rule.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
     def _build_file_panel(self, parent: ttk.Frame) -> None:
-        file_frame = ttk.LabelFrame(parent, text="文件", padding=10)
-        file_frame.grid(row=0, column=0, sticky="ew")
+        file_frame = ttk.LabelFrame(parent, text="文件 / SOURCE", padding=10)
+        file_frame.grid(row=1, column=0, sticky="ew", pady=(12, 0))
         file_frame.columnconfigure(1, weight=1)
 
         ttk.Label(file_frame, text="输入").grid(row=0, column=0, sticky="w", padx=(0, 8))
@@ -209,22 +217,41 @@ class GlyphMotionApp(tk.Tk):
         )
         self.convert_button.grid(row=0, column=0, sticky="ew")
 
-        self.status_var = tk.StringVar(value="就绪")
-        ttk.Label(
+        self.status_var = tk.StringVar(value="● 就绪 / READY")
+        self.status_label = ttk.Label(
             action_frame,
             textvariable=self.status_var,
             style="Status.TLabel",
             wraplength=300,
-        ).grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        )
+        self.status_label.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
         self._build_results_area(action_frame)
 
+    def _set_status(self, text: str, *, error: bool = False) -> None:
+        self.status_label.configure(foreground=self.theme.accent2 if error else self.theme.accent)
+        self.status_var.set(text)
+
     def _build_results_area(self, parent: ttk.Frame) -> None:
-        results = ttk.LabelFrame(parent, text="输出文件", padding=8)
+        results = ttk.LabelFrame(parent, text="输出文件 / OUTPUT", padding=8)
         results.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         results.columnconfigure(0, weight=1)
 
-        self.output_list = tk.Listbox(results, height=5, activestyle="none")
+        self.output_list = tk.Listbox(
+            results,
+            height=5,
+            activestyle="none",
+            bg=self.theme.input_bg,
+            fg=self.theme.fg,
+            selectbackground=self.theme.accent,
+            selectforeground=self.theme.bg,
+            highlightthickness=1,
+            highlightbackground=self.theme.border,
+            highlightcolor=self.theme.border,
+            borderwidth=0,
+            relief="flat",
+            font=(self.theme.mono_font, 9),
+        )
         self.output_list.grid(row=0, column=0, sticky="ew")
         list_scroll = ttk.Scrollbar(results, orient=tk.VERTICAL, command=self.output_list.yview)
         self.output_list.configure(yscrollcommand=list_scroll.set)
@@ -243,7 +270,7 @@ class GlyphMotionApp(tk.Tk):
         self.open_file_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
-        preset_frame = ttk.LabelFrame(parent, text="预设", padding=10)
+        preset_frame = ttk.LabelFrame(parent, text="预设 / PRESET", padding=10)
         preset_frame.grid(row=0, column=0, sticky="ew")
         preset_frame.columnconfigure(1, weight=1)
 
@@ -258,7 +285,7 @@ class GlyphMotionApp(tk.Tk):
         preset_combo.grid(row=0, column=1, sticky="ew")
         self.preset_var.trace_add("write", self._on_preset_changed)
 
-        grid_frame = ttk.LabelFrame(parent, text="尺寸与时间", padding=10)
+        grid_frame = ttk.LabelFrame(parent, text="尺寸与时间 / GEOMETRY", padding=10)
         grid_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         grid_frame.columnconfigure(1, weight=1)
         grid_frame.columnconfigure(3, weight=1)
@@ -268,7 +295,7 @@ class GlyphMotionApp(tk.Tk):
         self._add_spinbox(grid_frame, 1, 0, "帧率", self.fps_var, 1, 60, 1)
         self._add_spinbox(grid_frame, 1, 2, "帧数", self.max_frames_var, 1, 5000, 10)
 
-        render_frame = ttk.LabelFrame(parent, text="字符与渲染", padding=10)
+        render_frame = ttk.LabelFrame(parent, text="字符与渲染 / RENDER", padding=10)
         render_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         render_frame.columnconfigure(1, weight=1)
 
@@ -288,7 +315,7 @@ class GlyphMotionApp(tk.Tk):
             state="readonly",
         ).grid(row=1, column=1, sticky="ew", pady=(8, 0))
 
-        options_frame = ttk.LabelFrame(parent, text="处理选项", padding=10)
+        options_frame = ttk.LabelFrame(parent, text="处理选项 / OPTIONS", padding=10)
         options_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         for column in range(2):
             options_frame.columnconfigure(column, weight=1)
@@ -318,7 +345,7 @@ class GlyphMotionApp(tk.Tk):
         ttk.Button(actions, text="全选", command=self._select_all_formats).grid(row=0, column=1, sticky="w", padx=(8, 0))
         ttk.Button(actions, text="清空", command=self._clear_formats).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
-        formats_frame = ttk.LabelFrame(parent, text="格式", padding=10)
+        formats_frame = ttk.LabelFrame(parent, text="格式 / FORMATS", padding=10)
         formats_frame.grid(row=1, column=0, sticky="new", pady=(10, 0))
         for column in range(2):
             formats_frame.columnconfigure(column, weight=1)
@@ -353,13 +380,17 @@ class GlyphMotionApp(tk.Tk):
         self.preview = tk.Text(
             parent,
             wrap="none",
-            bg="#080808",
-            fg="#f2f2f2",
-            insertbackground="#f2f2f2",
-            selectbackground="#374151",
+            bg=self.theme.input_bg,
+            fg=self.theme.accent,
+            insertbackground=self.theme.accent,
+            selectbackground=self.theme.accent_dim,
+            selectforeground=self.theme.bg,
             relief="flat",
             borderwidth=0,
-            font=("Consolas", 8),
+            highlightthickness=1,
+            highlightbackground=self.theme.border,
+            highlightcolor=self.theme.border,
+            font=(self.theme.mono_font, 8),
         )
         self.preview.grid(row=0, column=0, sticky="nsew")
         ybar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.preview.yview)
@@ -470,7 +501,7 @@ class GlyphMotionApp(tk.Tk):
 
         self._conversion_running = True
         self.convert_button.configure(state=tk.DISABLED)
-        self.status_var.set("正在转换...")
+        self._set_status("● 正在转换 / RUNNING…")
         self.preview.delete("1.0", tk.END)
         thread = threading.Thread(target=self._convert_worker, args=(request,), daemon=True)
         thread.start()
@@ -534,18 +565,18 @@ class GlyphMotionApp(tk.Tk):
             return
 
         if isinstance(message, ConversionProgress):
-            self.status_var.set(message.message)
+            self._set_status(message.message)
         elif isinstance(message, ConversionSuccess):
             self._finish_conversion()
             self.preview.delete("1.0", tk.END)
             self.preview.insert("1.0", message.preview)
             self._set_outputs(message.outputs)
-            self.status_var.set(
-                f"完成：{len(message.animation.frames)} 帧，生成 {len(message.outputs)} 个文件"
+            self._set_status(
+                f"● 完成 / DONE — {len(message.animation.frames)} 帧，{len(message.outputs)} 个文件"
             )
         elif isinstance(message, ConversionFailure):
             self._finish_conversion()
-            self.status_var.set("转换失败")
+            self._set_status("● 转换失败 / FAILED", error=True)
             messagebox.showerror("转换失败", message.message)
         self.after(100, self._poll_queue)
 
