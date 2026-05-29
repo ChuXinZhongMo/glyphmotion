@@ -15,24 +15,27 @@ from tkinter import ttk
 
 @dataclass(frozen=True)
 class Theme:
+    """Soft purple-and-white "anime" palette: light lavender surfaces, gentle
+    violet accents, rounded calm contrast."""
+
     # Surfaces
-    bg: str = "#0a0e15"          # window / base
-    panel: str = "#0e1420"       # raised panels
-    panel_alt: str = "#131d2c"   # hover / selected row
-    input_bg: str = "#0b1019"    # entry / spinbox / list field
-    border: str = "#1d2c3e"      # thin panel outlines
-    grid: str = "#13202f"        # subtle separators
+    bg: str = "#f5f2fc"          # soft lavender white (window / base)
+    panel: str = "#ffffff"       # raised panels / buttons
+    panel_alt: str = "#ece5fb"   # hover / selected row
+    input_bg: str = "#ffffff"    # entry / spinbox / list field
+    border: str = "#e0d6f3"      # thin soft outlines
+    grid: str = "#efeafb"        # subtle separators
 
     # Text
-    fg: str = "#c7d4e3"          # primary text
-    fg_dim: str = "#5e6e80"      # muted labels / units
-    heading: str = "#e6f0fb"     # section titles
+    fg: str = "#5b5470"          # primary text (muted plum)
+    fg_dim: str = "#a79ec2"      # muted labels / units
+    heading: str = "#7b5fd0"     # section titles (violet)
 
     # Accents
-    accent: str = "#27e0d0"      # cyan — primary
-    accent_dim: str = "#179b91"  # cyan pressed
-    accent2: str = "#ff4d85"     # magenta — secondary
-    warn: str = "#ffb454"        # amber — warnings
+    accent: str = "#a98eea"      # soft violet — primary
+    accent_dim: str = "#8d6fe0"  # violet pressed
+    accent2: str = "#f3a6cc"     # soft pink — secondary
+    warn: str = "#efa9d1"        # pink — warnings / failure
 
     # Fonts
     ui_font: str = "Microsoft YaHei UI"
@@ -93,7 +96,7 @@ def apply_theme(root: tk.Misc, theme: Theme = THEME) -> Theme:
     style.configure(
         "TLabelframe.Label",
         background=theme.bg,
-        foreground=theme.accent,
+        foreground=theme.heading,
         font=(ui, 10, "bold"),
     )
 
@@ -120,7 +123,7 @@ def apply_theme(root: tk.Misc, theme: Theme = THEME) -> Theme:
     style.configure(
         "Primary.TButton",
         background=theme.accent,
-        foreground=theme.bg,
+        foreground="#ffffff",
         bordercolor=theme.accent,
         lightcolor=theme.accent,
         darkcolor=theme.accent,
@@ -206,7 +209,7 @@ def apply_theme(root: tk.Misc, theme: Theme = THEME) -> Theme:
     style.configure("TNotebook", background=theme.bg, bordercolor=theme.border, tabmargins=(2, 4, 2, 0))
     style.configure(
         "TNotebook.Tab",
-        background=theme.panel,
+        background=theme.grid,
         foreground=theme.fg_dim,
         bordercolor=theme.border,
         padding=(16, 7),
@@ -215,7 +218,7 @@ def apply_theme(root: tk.Misc, theme: Theme = THEME) -> Theme:
     style.map(
         "TNotebook.Tab",
         background=[("selected", theme.bg)],
-        foreground=[("selected", theme.accent), ("active", theme.fg)],
+        foreground=[("selected", theme.heading), ("active", theme.fg)],
         bordercolor=[("selected", theme.accent)],
     )
 

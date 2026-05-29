@@ -135,8 +135,8 @@ class GlyphMotionApp(tk.Tk):
 
     def _build_ui(self) -> None:
         self.theme = apply_theme(self)
-        self.geometry("1180x760")
-        self.minsize(1040, 640)
+        self.geometry("1220x820")
+        self.minsize(1120, 760)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
@@ -152,12 +152,19 @@ class GlyphMotionApp(tk.Tk):
 
         controls = ttk.Frame(body, padding=(0, 0, 10, 0), style="App.TFrame")
         controls.columnconfigure(0, weight=1)
-        preview_frame = ttk.LabelFrame(body, text="预览 / PREVIEW", padding=10)
+
+        right = ttk.Frame(body, style="App.TFrame")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1)
+        preview_frame = ttk.LabelFrame(right, text="预览 / PREVIEW", padding=10)
+        preview_frame.grid(row=0, column=0, sticky="nsew")
+
         body.add(controls, weight=0)
-        body.add(preview_frame, weight=1)
+        body.add(right, weight=1)
 
         self._build_control_panel(controls)
         self._build_preview_panel(preview_frame)
+        self._build_results_area(right)
 
     def _build_header(self, parent: ttk.Frame) -> None:
         header = ttk.Frame(parent, style="Header.TFrame")
@@ -226,25 +233,23 @@ class GlyphMotionApp(tk.Tk):
         )
         self.status_label.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
-        self._build_results_area(action_frame)
-
     def _set_status(self, text: str, *, error: bool = False) -> None:
         self.status_label.configure(foreground=self.theme.accent2 if error else self.theme.accent)
         self.status_var.set(text)
 
     def _build_results_area(self, parent: ttk.Frame) -> None:
         results = ttk.LabelFrame(parent, text="输出文件 / OUTPUT", padding=8)
-        results.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        results.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         results.columnconfigure(0, weight=1)
 
         self.output_list = tk.Listbox(
             results,
-            height=5,
+            height=4,
             activestyle="none",
             bg=self.theme.input_bg,
             fg=self.theme.fg,
             selectbackground=self.theme.accent,
-            selectforeground=self.theme.bg,
+            selectforeground="#ffffff",
             highlightthickness=1,
             highlightbackground=self.theme.border,
             highlightcolor=self.theme.border,
@@ -317,7 +322,8 @@ class GlyphMotionApp(tk.Tk):
 
         options_frame = ttk.LabelFrame(parent, text="处理选项 / OPTIONS", padding=10)
         options_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-        for column in range(2):
+        columns = 2
+        for column in range(columns):
             options_frame.columnconfigure(column, weight=1)
 
         checks = [
@@ -332,9 +338,10 @@ class GlyphMotionApp(tk.Tk):
         ]
         for index, (label, variable) in enumerate(checks):
             ttk.Checkbutton(options_frame, text=label, variable=variable).grid(
-                row=index // 2,
-                column=index % 2,
+                row=index // columns,
+                column=index % columns,
                 sticky="w",
+                padx=(0, 12),
                 pady=3,
             )
 
@@ -381,10 +388,10 @@ class GlyphMotionApp(tk.Tk):
             parent,
             wrap="none",
             bg=self.theme.input_bg,
-            fg=self.theme.accent,
+            fg=self.theme.fg,
             insertbackground=self.theme.accent,
-            selectbackground=self.theme.accent_dim,
-            selectforeground=self.theme.bg,
+            selectbackground=self.theme.accent,
+            selectforeground="#ffffff",
             relief="flat",
             borderwidth=0,
             highlightthickness=1,
