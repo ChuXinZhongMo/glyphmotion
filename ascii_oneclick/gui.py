@@ -135,8 +135,8 @@ class GlyphMotionApp(tk.Tk):
 
     def _build_ui(self) -> None:
         self.theme = apply_theme(self)
-        self.geometry("1220x820")
-        self.minsize(1120, 760)
+        self.geometry("1240x900")
+        self.minsize(1160, 860)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
@@ -156,14 +156,14 @@ class GlyphMotionApp(tk.Tk):
         right = ttk.Frame(body, style="App.TFrame")
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)
-        preview_frame = ttk.LabelFrame(right, text="预览 / PREVIEW", padding=10)
-        preview_frame.grid(row=0, column=0, sticky="nsew")
+        preview_card = self._make_card(right, "预览 / PREVIEW")
+        preview_card.grid(row=0, column=0, sticky="nsew")
 
         body.add(controls, weight=0)
         body.add(right, weight=1)
 
         self._build_control_panel(controls)
-        self._build_preview_panel(preview_frame)
+        self._build_preview_panel(preview_card.content)
         self._build_results_area(right)
 
     def _build_header(self, parent: ttk.Frame) -> None:
@@ -180,13 +180,28 @@ class GlyphMotionApp(tk.Tk):
             style="Subtitle.TLabel",
         ).grid(row=0, column=1, sticky="e", pady=(8, 0))
 
-        # Glowing accent rule beneath the title bar.
+        # Soft accent rule beneath the title bar.
         rule = tk.Frame(header, height=2, bg=self.theme.accent, bd=0, highlightthickness=0)
         rule.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
+    def _make_card(self, parent: tk.Misc, title: str) -> ttk.Frame:
+        """A white rounded card (image-backed) with a heading and a content
+        frame exposed as ``card.content``."""
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(18, 10, 18, 14))
+        card.columnconfigure(0, weight=1)
+        card.rowconfigure(1, weight=1)
+        ttk.Label(card, text=title, style="CardTitle.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 7)
+        )
+        content = ttk.Frame(card, style="CardBody.TFrame")
+        content.grid(row=1, column=0, sticky="nsew")
+        card.content = content  # type: ignore[attr-defined]
+        return card
+
     def _build_file_panel(self, parent: ttk.Frame) -> None:
-        file_frame = ttk.LabelFrame(parent, text="文件 / SOURCE", padding=10)
-        file_frame.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        card = self._make_card(parent, "文件 / SOURCE")
+        card.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        file_frame = card.content
         file_frame.columnconfigure(1, weight=1)
 
         ttk.Label(file_frame, text="输入").grid(row=0, column=0, sticky="w", padx=(0, 8))
@@ -238,8 +253,9 @@ class GlyphMotionApp(tk.Tk):
         self.status_var.set(text)
 
     def _build_results_area(self, parent: ttk.Frame) -> None:
-        results = ttk.LabelFrame(parent, text="输出文件 / OUTPUT", padding=8)
-        results.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        card = self._make_card(parent, "输出文件 / OUTPUT")
+        card.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        results = card.content
         results.columnconfigure(0, weight=1)
 
         self.output_list = tk.Listbox(
@@ -275,8 +291,9 @@ class GlyphMotionApp(tk.Tk):
         self.open_file_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
-        preset_frame = ttk.LabelFrame(parent, text="预设 / PRESET", padding=10)
-        preset_frame.grid(row=0, column=0, sticky="ew")
+        preset_card = self._make_card(parent, "预设 / PRESET")
+        preset_card.grid(row=0, column=0, sticky="ew")
+        preset_frame = preset_card.content
         preset_frame.columnconfigure(1, weight=1)
 
         ttk.Label(preset_frame, text="效果").grid(row=0, column=0, sticky="w", padx=(0, 8))
@@ -290,8 +307,9 @@ class GlyphMotionApp(tk.Tk):
         preset_combo.grid(row=0, column=1, sticky="ew")
         self.preset_var.trace_add("write", self._on_preset_changed)
 
-        grid_frame = ttk.LabelFrame(parent, text="尺寸与时间 / GEOMETRY", padding=10)
-        grid_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        grid_card = self._make_card(parent, "尺寸与时间 / GEOMETRY")
+        grid_card.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        grid_frame = grid_card.content
         grid_frame.columnconfigure(1, weight=1)
         grid_frame.columnconfigure(3, weight=1)
 
@@ -300,8 +318,9 @@ class GlyphMotionApp(tk.Tk):
         self._add_spinbox(grid_frame, 1, 0, "帧率", self.fps_var, 1, 60, 1)
         self._add_spinbox(grid_frame, 1, 2, "帧数", self.max_frames_var, 1, 5000, 10)
 
-        render_frame = ttk.LabelFrame(parent, text="字符与渲染 / RENDER", padding=10)
-        render_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        render_card = self._make_card(parent, "字符与渲染 / RENDER")
+        render_card.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        render_frame = render_card.content
         render_frame.columnconfigure(1, weight=1)
 
         ttk.Label(render_frame, text="字符").grid(row=0, column=0, sticky="w", padx=(0, 8))
@@ -320,8 +339,9 @@ class GlyphMotionApp(tk.Tk):
             state="readonly",
         ).grid(row=1, column=1, sticky="ew", pady=(8, 0))
 
-        options_frame = ttk.LabelFrame(parent, text="处理选项 / OPTIONS", padding=10)
-        options_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        options_card = self._make_card(parent, "处理选项 / OPTIONS")
+        options_card.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        options_frame = options_card.content
         columns = 2
         for column in range(columns):
             options_frame.columnconfigure(column, weight=1)
@@ -352,8 +372,9 @@ class GlyphMotionApp(tk.Tk):
         ttk.Button(actions, text="全选", command=self._select_all_formats).grid(row=0, column=1, sticky="w", padx=(8, 0))
         ttk.Button(actions, text="清空", command=self._clear_formats).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
-        formats_frame = ttk.LabelFrame(parent, text="格式 / FORMATS", padding=10)
-        formats_frame.grid(row=1, column=0, sticky="new", pady=(10, 0))
+        formats_card = self._make_card(parent, "格式 / FORMATS")
+        formats_card.grid(row=1, column=0, sticky="new", pady=(12, 0))
+        formats_frame = formats_card.content
         for column in range(2):
             formats_frame.columnconfigure(column, weight=1)
 
