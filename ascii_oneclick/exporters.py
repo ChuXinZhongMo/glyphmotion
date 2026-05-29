@@ -342,7 +342,26 @@ def export_mp4(
             command += ["-i", str(source)]
         command += [
             "-vf",
-            "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            "-preset",
+            "slow",
+            # Keep the source's full RGB range (0-255) instead of letting
+            # swscale silently compress to limited TV range (16-235), which is
+            # what made the MP4 look darker/duller than the GIF.
+            "-pix_fmt",
+            "yuv420p",
+            "-color_range",
+            "pc",
+            "-colorspace",
+            "bt709",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
         ]
         if keep_audio:
             command += [
