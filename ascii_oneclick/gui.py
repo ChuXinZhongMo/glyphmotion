@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from dataclasses import dataclass
@@ -20,7 +23,7 @@ from .core import (
     find_ffmpeg,
 )
 from .exporters import export_many
-from .formats import DEFAULT_FORMAT_NAMES, FORMAT_LABELS, OUTPUT_FORMATS
+from .formats import DEFAULT_FORMAT_NAMES, FORMAT_LABELS, FORMATS_BY_NAME, OUTPUT_FORMATS
 from .presets import PRESETS, PRESETS_BY_NAME, Preset
 
 
@@ -100,6 +103,8 @@ class GlyphMotionApp(tk.Tk):
         self.minsize(860, 560)
         self.work_queue: queue.Queue[ConversionMessage] = queue.Queue()
         self._conversion_running = False
+        self.last_outputs: list[Path] = []
+        self.last_output_dir: Path | None = None
 
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar(value=str(Path.cwd() / "输出"))
@@ -212,6 +217,31 @@ class GlyphMotionApp(tk.Tk):
             wraplength=300,
         ).grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
+        self._build_results_area(action_frame)
+
+    def _build_results_area(self, parent: ttk.Frame) -> None:
+        results = ttk.LabelFrame(parent, text="输出文件", padding=8)
+        results.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        results.columnconfigure(0, weight=1)
+
+        self.output_list = tk.Listbox(results, height=5, activestyle="none")
+        self.output_list.grid(row=0, column=0, sticky="ew")
+        list_scroll = ttk.Scrollbar(results, orient=tk.VERTICAL, command=self.output_list.yview)
+        self.output_list.configure(yscrollcommand=list_scroll.set)
+        list_scroll.grid(row=0, column=1, sticky="ns")
+        self.output_list.bind("<Double-Button-1>", lambda _event: self._open_selected_output())
+
+        buttons = ttk.Frame(results)
+        buttons.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.open_dir_button = ttk.Button(
+            buttons, text="打开输出目录", command=self._open_output_dir, state=tk.DISABLED
+        )
+        self.open_dir_button.grid(row=0, column=0, sticky="w")
+        self.open_file_button = ttk.Button(
+            buttons, text="打开所选文件", command=self._open_selected_output, state=tk.DISABLED
+        )
+        self.open_file_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
+
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
         preset_frame = ttk.LabelFrame(parent, text="预设", padding=10)
         preset_frame.grid(row=0, column=0, sticky="ew")
@@ -293,12 +323,29 @@ class GlyphMotionApp(tk.Tk):
         for column in range(2):
             formats_frame.columnconfigure(column, weight=1)
 
+        # Detect external tools once so MP4/ANSI can show their dependency.
+        tool_available = {"ffmpeg": find_ffmpeg() is not None, "chafa": find_chafa() is not None}
         for index, (name, variable) in enumerate(self.format_vars.items()):
             ttk.Checkbutton(
                 formats_frame,
-                text=FORMAT_LABELS.get(name, name),
+                text=self._format_checkbox_label(name, tool_available),
                 variable=variable,
             ).grid(row=index // 2, column=index % 2, sticky="w", pady=4, padx=(0, 10))
+
+    @staticmethod
+    def _format_checkbox_label(name: str, tool_available: dict[str, bool]) -> str:
+        fmt = FORMATS_BY_NAME.get(name)
+        if fmt is None:
+            return FORMAT_LABELS.get(name, name)
+        if not fmt.requires_tool:
+            return fmt.label
+        tool_display = {"ffmpeg": "FFmpeg", "chafa": "Chafa"}[fmt.requires_tool]
+        available = tool_available.get(fmt.requires_tool, False)
+        if fmt.tool_optional:
+            note = f"建议 {tool_display}" if available else f"{tool_display} 未检测到，将用内置降级"
+        else:
+            note = f"需 {tool_display}" if available else f"需 {tool_display}，未检测到"
+        return f"{fmt.label}（{note}）"
 
     def _build_preview_panel(self, parent: ttk.LabelFrame) -> None:
         parent.rowconfigure(0, weight=1)
@@ -492,10 +539,10 @@ class GlyphMotionApp(tk.Tk):
             self._finish_conversion()
             self.preview.delete("1.0", tk.END)
             self.preview.insert("1.0", message.preview)
+            self._set_outputs(message.outputs)
             self.status_var.set(
                 f"完成：{len(message.animation.frames)} 帧，生成 {len(message.outputs)} 个文件"
             )
-            messagebox.showinfo("转换完成", "已生成：\n" + "\n".join(str(path) for path in message.outputs))
         elif isinstance(message, ConversionFailure):
             self._finish_conversion()
             self.status_var.set("转换失败")
@@ -505,6 +552,46 @@ class GlyphMotionApp(tk.Tk):
     def _finish_conversion(self) -> None:
         self._conversion_running = False
         self.convert_button.configure(state=tk.NORMAL)
+
+    def _set_outputs(self, outputs: list[Path]) -> None:
+        self.last_outputs = list(outputs)
+        self.last_output_dir = outputs[0].parent if outputs else None
+        self.output_list.delete(0, tk.END)
+        for path in self.last_outputs:
+            self.output_list.insert(tk.END, path.name)
+        has_outputs = bool(self.last_outputs)
+        self.open_dir_button.configure(state=tk.NORMAL if self.last_output_dir else tk.DISABLED)
+        self.open_file_button.configure(state=tk.NORMAL if has_outputs else tk.DISABLED)
+        if has_outputs:
+            self.output_list.selection_clear(0, tk.END)
+            self.output_list.selection_set(0)
+
+    def _open_output_dir(self) -> None:
+        if self.last_output_dir and self.last_output_dir.exists():
+            self._open_path(self.last_output_dir)
+        else:
+            messagebox.showinfo("没有输出目录", "请先完成一次转换。")
+
+    def _open_selected_output(self) -> None:
+        selection = self.output_list.curselection()
+        if not selection or not self.last_outputs:
+            return
+        target = self.last_outputs[selection[0]]
+        if target.exists():
+            self._open_path(target)
+        else:
+            messagebox.showinfo("文件不存在", f"未找到文件：{target}")
+
+    def _open_path(self, target: Path) -> None:
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(target)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(target)], check=False)
+        except OSError as exc:
+            messagebox.showerror("无法打开", str(exc))
 
 
 def main() -> None:
