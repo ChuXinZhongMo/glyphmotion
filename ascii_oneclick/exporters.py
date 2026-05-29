@@ -110,12 +110,38 @@ def export_html(animation: AsciiAnimation, path: str | Path, color: bool = True)
         render_line = "screen.textContent = frames[index];"
     durations = [max(16, int(frame.duration * 1000)) for frame in animation.frames]
 
-    document = f"""<!doctype html>
-<html lang="en">
+    document = _html_document(
+        title=f"{html.escape(APP_NAME)} - {html.escape(animation.source.name)}",
+        font_family=font_family,
+        frames_json=json.dumps(rendered_frames, ensure_ascii=False),
+        durations_json=json.dumps(durations),
+        render_line=render_line,
+        default_delay=int(1000 / max(animation.fps, 1.0)),
+        fps=round(max(animation.fps, 1.0), 2),
+    )
+    path.write_text(document, encoding="utf-8", newline="\n")
+    return path
+
+
+# Self-contained single-file player. CSS/JS braces are doubled for the f-string;
+# the data placeholders (frames_json/durations_json) are pre-serialized so they
+# never introduce stray braces.
+def _html_document(
+    *,
+    title: str,
+    font_family: str,
+    frames_json: str,
+    durations_json: str,
+    render_line: str,
+    default_delay: int,
+    fps: float,
+) -> str:
+    return f"""<!doctype html>
+<html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(APP_NAME)} - {html.escape(animation.source.name)}</title>
+<title>{title}</title>
 <style>
 body {{
   margin: 0;
@@ -155,39 +181,78 @@ button {{
   padding: 6px 10px;
   cursor: pointer;
 }}
+.info {{
+  margin-left: 4px;
+  color: #9aa0a6;
+}}
 </style>
 </head>
 <body>
 <main>
 <pre id="screen"></pre>
-<div class="bar"><button id="toggle">暂停</button><span id="meta"></span></div>
+<div class="bar">
+  <button id="toggle">暂停</button>
+  <button id="replay">重播</button>
+  <button id="speed">速度 1x</button>
+  <span id="meta" class="info"></span>
+  <span id="rate" class="info"></span>
+</div>
 </main>
 <script>
-const frames = {json.dumps(rendered_frames, ensure_ascii=False)};
-const durations = {json.dumps(durations)};
+const frames = {frames_json};
+const durations = {durations_json};
+const defaultDelay = {default_delay};
+const baseFps = {fps};
+const speeds = [0.5, 1, 2, 4];
+let speedIndex = 1;
 const screen = document.getElementById("screen");
 const meta = document.getElementById("meta");
+const rate = document.getElementById("rate");
 const toggle = document.getElementById("toggle");
+const replay = document.getElementById("replay");
+const speedBtn = document.getElementById("speed");
 let index = 0;
 let playing = true;
 let timer = null;
 function draw() {{
   {render_line}
   meta.textContent = `${{index + 1}} / ${{frames.length}}`;
+  rate.textContent = `${{(baseFps * speeds[speedIndex]).toFixed(1)}} fps`;
+}}
+function frameDelay() {{
+  return (durations[index] || defaultDelay) / speeds[speedIndex];
 }}
 function schedule() {{
-  if (!playing) return;
+  if (!playing || frames.length <= 1) return;
   timer = setTimeout(() => {{
     index = (index + 1) % frames.length;
     draw();
     schedule();
-  }}, durations[index] || {int(1000 / max(animation.fps, 1.0))});
+  }}, frameDelay());
+}}
+function restart() {{
+  if (timer) clearTimeout(timer);
+  if (playing) schedule();
 }}
 toggle.addEventListener("click", () => {{
   playing = !playing;
   toggle.textContent = playing ? "暂停" : "播放";
-  if (timer) clearTimeout(timer);
-  if (playing) schedule();
+  restart();
+}});
+replay.addEventListener("click", () => {{
+  index = 0;
+  if (!playing) {{
+    playing = true;
+    toggle.textContent = "暂停";
+  }}
+  draw();
+  restart();
+}});
+speedBtn.addEventListener("click", () => {{
+  speedIndex = (speedIndex + 1) % speeds.length;
+  speedBtn.textContent = `速度 ${{speeds[speedIndex]}}x`;
+  draw();
+  restart();
 }});
 draw();
 schedule();
@@ -195,8 +260,6 @@ schedule();
 </body>
 </html>
 """
-    path.write_text(document, encoding="utf-8", newline="\n")
-    return path
 
 
 def export_png(animation: AsciiAnimation, path: str | Path, color: bool = True) -> Path:

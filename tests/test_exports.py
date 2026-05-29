@@ -36,6 +36,22 @@ def test_html_contains_frames_and_durations() -> None:
         assert len(durations) == len(animation.frames)
 
 
+def test_html_has_player_controls() -> None:
+    animation = _animation()
+    with tempfile.TemporaryDirectory() as out_dir:
+        (path,) = export_many(animation, out_dir, ["html"], color=True)
+        text = path.read_text(encoding="utf-8")
+        # Localized single-file player controls (Phase 5).
+        assert 'id="toggle"' in text
+        assert 'id="replay"' in text
+        assert 'id="speed"' in text
+        assert "重播" in text
+        assert 'lang="zh"' in text
+        # Still a single file: no external script/style references.
+        assert "<script src=" not in text
+        assert "<link " not in text
+
+
 def test_dur_is_gzip_json_with_frames() -> None:
     animation = _animation()
     with tempfile.TemporaryDirectory() as out_dir:
@@ -87,6 +103,7 @@ def test_mono_html_renders() -> None:
 
 TESTS = [
     test_html_contains_frames_and_durations,
+    test_html_has_player_controls,
     test_dur_is_gzip_json_with_frames,
     test_asciimation_header,
     test_txt_nonempty,
