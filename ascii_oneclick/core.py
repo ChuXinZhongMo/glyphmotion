@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -107,6 +108,14 @@ class ConversionError(RuntimeError):
     pass
 
 
+class ConversionCancelled(Exception):
+    """Raised cooperatively when the caller asks to stop a conversion.
+
+    Kept separate from :class:`ConversionError` so callers can distinguish a
+    user-requested cancel from a genuine failure.
+    """
+
+
 def default_char_aspect() -> float:
     try:
         from .exporters import measure_font_aspect
@@ -193,7 +202,16 @@ def convert_file(
     input_path: str | Path,
     options: ConvertOptions,
     ffmpeg_path: str | None = None,
+    progress: "Callable[[int, int], None] | None" = None,
+    should_cancel: "Callable[[], bool] | None" = None,
 ) -> AsciiAnimation:
+    """Decode ``input_path`` and render every frame to character art.
+
+    ``progress(done, total)`` is called after each frame is rendered, and
+    ``should_cancel()`` is polled before every frame so a caller can stop the
+    (often slow) per-pixel render loop promptly; cancelling raises
+    :class:`ConversionCancelled`.
+    """
     source = Path(input_path)
     if not source.exists():
         raise ConversionError(f"Input file not found: {source}")
@@ -202,7 +220,14 @@ def convert_file(
     if not images:
         raise ConversionError("No frames were decoded from the input file.")
 
-    frames = [image_to_ascii(img, duration, options) for img, duration in zip(images, durations)]
+    total = len(images)
+    frames: list[AsciiFrame] = []
+    for index, (img, duration) in enumerate(zip(images, durations)):
+        if should_cancel is not None and should_cancel():
+            raise ConversionCancelled()
+        frames.append(image_to_ascii(img, duration, options))
+        if progress is not None:
+            progress(index + 1, total)
     rows = len(frames[0].lines)
     columns = len(frames[0].lines[0]) if rows else 0
     return AsciiAnimation(frames=frames, columns=columns, rows=rows, fps=options.fps, source=source)

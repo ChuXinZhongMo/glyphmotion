@@ -81,7 +81,7 @@ def test_success_populates_output_list_and_restores_button() -> None:
         app.destroy()
 
 
-def test_preview_player() -> None:
+def test_preview_random_and_stepping() -> None:
     app = _make_app()
     try:
         frames = [
@@ -94,21 +94,21 @@ def test_preview_player() -> None:
         ]
         anim = AsciiAnimation(frames=frames, columns=2, rows=2, fps=10, source=Path("x.gif"))
         app._set_preview_animation(anim)
-        # First frame shown, controls enabled for a multi-frame animation.
-        assert app.preview_meta_var.get() == "帧 1 / 3"
-        assert str(app.play_button["state"]) == "normal"
+        # A frame is shown and nav controls are enabled for a multi-frame clip.
+        assert app.preview_meta_var.get() in {f"帧 {i} / 3" for i in (1, 2, 3)}
+        assert str(app.random_button["state"]) == "normal"
         assert "ab" in app.preview.get("1.0", "end-1c")
-        # Stepping advances the frame counter.
+        # Stepping wraps within range.
+        app._preview_index = 0
         app._preview_next()
         assert app._preview_index == 1
         assert app.preview_meta_var.get() == "帧 2 / 3"
         app._preview_prev()
         assert app._preview_index == 0
-        # Play toggles state and schedules; stop cancels.
-        app._toggle_preview_play()
-        assert app._preview_playing is True
-        app._stop_preview()
-        assert app._preview_playing is False
+        # Random jumps to a different in-range frame and never raises.
+        app._preview_random()
+        assert app._preview_index != 0
+        assert 0 <= app._preview_index < 3
         # Zoom must not raise.
         app._zoom_preview(1)
         app._zoom_preview(-1)
@@ -116,14 +116,17 @@ def test_preview_player() -> None:
         app.destroy()
 
 
-def test_preview_single_frame_disables_playback() -> None:
+def test_preview_single_frame_disables_nav() -> None:
     app = _make_app()
     try:
         frame = AsciiFrame(lines=["xy"], colors=[[(10, 20, 30), (40, 50, 60)]], duration=0.1)
         anim = AsciiAnimation(frames=[frame], columns=2, rows=1, fps=10, source=Path("x.gif"))
         app._set_preview_animation(anim)
         assert app.preview_meta_var.get() == "帧 1 / 1"
-        assert str(app.play_button["state"]) == "disabled"
+        assert str(app.random_button["state"]) == "disabled"
+        # Random on a single frame is a no-op, not an error.
+        app._preview_random()
+        assert app._preview_index == 0
     finally:
         app.destroy()
 
@@ -145,8 +148,8 @@ TK_TESTS = [
     test_app_builds_and_destroys,
     test_preset_change_updates_controls,
     test_success_populates_output_list_and_restores_button,
-    test_preview_player,
-    test_preview_single_frame_disables_playback,
+    test_preview_random_and_stepping,
+    test_preview_single_frame_disables_nav,
 ]
 LOGIC_TESTS = [
     test_format_checkbox_label_tool_hints,

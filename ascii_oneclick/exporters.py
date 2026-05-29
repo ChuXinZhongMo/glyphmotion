@@ -5,12 +5,20 @@ import html
 import json
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 from . import APP_NAME
-from .core import AsciiAnimation, VIDEO_EXTENSIONS, find_chafa, find_ffmpeg, safe_output_stem
+from .core import (
+    AsciiAnimation,
+    ConversionCancelled,
+    VIDEO_EXTENSIONS,
+    find_chafa,
+    find_ffmpeg,
+    safe_output_stem,
+)
 
 
 def export_many(
@@ -20,13 +28,19 @@ def export_many(
     color: bool = True,
     ffmpeg_path: str | None = None,
     chafa_path: str | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> list[Path]:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = safe_output_stem(animation.source)
     written: list[Path] = []
 
-    for fmt in [item.lower().strip() for item in formats if item.strip()]:
+    fmts = [item.lower().strip() for item in formats if item.strip()]
+    total = len(fmts)
+    for done, fmt in enumerate(fmts, start=1):
+        if should_cancel is not None and should_cancel():
+            raise ConversionCancelled()
         if fmt == "txt":
             path = out_dir / f"{stem}.txt"
             export_txt(animation, path)
@@ -54,6 +68,8 @@ def export_many(
         else:
             raise ValueError(f"Unknown output format: {fmt}")
         written.append(path)
+        if progress is not None:
+            progress(done, total, fmt)
     return written
 
 
@@ -298,6 +314,11 @@ def export_mp4(
     if not ffmpeg:
         raise RuntimeError("FFmpeg is required for MP4 export but was not found.")
 
+    # When the source is a video it may carry an audio track. Mux that original
+    # audio onto the rendered character-art video so the export keeps its sound.
+    source = animation.source
+    keep_audio = source.suffix.lower() in VIDEO_EXTENSIONS and source.exists()
+
     with tempfile.TemporaryDirectory(prefix="glyphmotion-render-") as temp_dir:
         temp = Path(temp_dir)
         for index, frame in enumerate(animation.frames, start=1):
@@ -314,8 +335,30 @@ def export_mp4(
             str(animation.fps),
             "-i",
             str(temp / "frame_%06d.png"),
+        ]
+        if keep_audio:
+            # Second input supplies the audio; "?" keeps it optional so a
+            # silent video still encodes instead of failing.
+            command += ["-i", str(source)]
+        command += [
             "-vf",
             "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p",
+        ]
+        if keep_audio:
+            command += [
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0?",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                # End at the shorter stream so audio is trimmed to the rendered
+                # (frame-limited) video length instead of overrunning it.
+                "-shortest",
+            ]
+        command += [
             "-movflags",
             "+faststart",
             str(path),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import queue
+import random
 import subprocess
 import sys
 import threading
@@ -14,6 +15,7 @@ from . import APP_NAME
 from .core import (
     CHARSETS,
     AsciiAnimation,
+    ConversionCancelled as ConversionCancelledError,
     ConversionError,
     ConvertOptions,
     adaptive_char_aspect,
@@ -90,10 +92,19 @@ class ConversionFailure:
 @dataclass(frozen=True)
 class ConversionProgress:
     message: str
+    # 0.0–1.0 overall completion, or None to update only the status text.
+    fraction: float | None = None
+
+
+@dataclass(frozen=True)
+class ConversionCancelled:
+    """The worker stopped early because the user asked to cancel."""
 
 
 # Anything the worker may place on the queue for the UI thread to consume.
-ConversionMessage = ConversionSuccess | ConversionFailure | ConversionProgress
+ConversionMessage = (
+    ConversionSuccess | ConversionFailure | ConversionProgress | ConversionCancelled
+)
 
 
 class GlyphMotionApp(tk.Tk):
@@ -104,14 +115,15 @@ class GlyphMotionApp(tk.Tk):
         self.minsize(860, 560)
         self.work_queue: queue.Queue[ConversionMessage] = queue.Queue()
         self._conversion_running = False
+        self._cancel_event: threading.Event | None = None
         self.last_outputs: list[Path] = []
         self.last_output_dir: Path | None = None
 
-        # Preview player state
+        # Preview state. Conversion shows a random frame to spot-check the
+        # effect; prev/next/random let the user inspect other frames. There is
+        # deliberately no auto-playback.
         self._preview_animation: AsciiAnimation | None = None
         self._preview_index = 0
-        self._preview_playing = False
-        self._preview_after_id: str | None = None
         self._preview_tags: dict[tuple, str] = {}
         self._preview_font_sizes = (8, 11, 14)
         self._preview_zoom = 0
@@ -165,59 +177,74 @@ class GlyphMotionApp(tk.Tk):
         right = ttk.Frame(body, style="App.TFrame")
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)
-        preview_card = self._make_card(right, "预览 / PREVIEW")
-        preview_card.grid(row=0, column=0, sticky="nsew")
+        preview_section = self._make_section(right, "预览 / PREVIEW", indent=0)
+        preview_section.grid(row=0, column=0, sticky="nsew")
 
         body.add(controls, weight=0)
         body.add(right, weight=1)
 
         self._build_control_panel(controls)
-        self._build_preview_panel(preview_card.content)
+        self._build_preview_panel(preview_section.content)
         self._build_results_area(right)
 
     def _build_header(self, parent: ttk.Frame) -> None:
-        header = ttk.Frame(parent, style="Header.TFrame")
+        # Standalone brand header that floats on the lavender page — no box or
+        # full-width rule, so the title reads as the app's identity rather than
+        # as a panel wrapping the content below.
+        header = ttk.Frame(parent, style="Header.TFrame", padding=(2, 2, 2, 6))
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
 
-        ttk.Label(header, text="◆ GLYPHMOTION", style="Title.TLabel").grid(
+        title_box = ttk.Frame(header, style="Header.TFrame")
+        title_box.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_box, text="◆ GLYPHMOTION", style="Title.TLabel").grid(
             row=0, column=0, sticky="w"
         )
+        # Short accent underline hugging just the title — a brand flourish, not
+        # a divider across the whole window.
+        underline = tk.Frame(
+            title_box, height=3, bg=self.theme.accent, bd=0, highlightthickness=0
+        )
+        underline.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+
         ttk.Label(
             header,
             text="字影工坊 · CHARACTER ANIMATION STUDIO",
             style="Subtitle.TLabel",
-        ).grid(row=0, column=1, sticky="e", pady=(8, 0))
+        ).grid(row=0, column=1, sticky="se", pady=(0, 2))
 
-        # Soft accent rule beneath the title bar.
-        rule = tk.Frame(header, height=2, bg=self.theme.accent, bd=0, highlightthickness=0)
-        rule.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+    def _make_section(self, parent: tk.Misc, title: str, *, indent: int = 12) -> ttk.Frame:
+        """A flat section: an accented heading on the lavender page with a
+        content frame below — no card, no shadow. Exposed as ``section.content``.
 
-    def _make_card(self, parent: tk.Misc, title: str) -> ttk.Frame:
-        """A white rounded card (image-backed) with a heading and a content
-        frame exposed as ``card.content``."""
-        card = ttk.Frame(parent, style="Card.TFrame", padding=(18, 10, 18, 14))
-        card.columnconfigure(0, weight=1)
-        card.rowconfigure(1, weight=1)
-        ttk.Label(card, text=title, style="CardTitle.TLabel").grid(
-            row=0, column=0, sticky="w", pady=(0, 7)
+        ``indent`` left-pads the content so small control groups read as
+        belonging to their heading; pass ``0`` for full-width panels (preview,
+        file list) where indentation would only create an asymmetric gap.
+        """
+        section = ttk.Frame(parent, style="App.TFrame")
+        section.columnconfigure(0, weight=1)
+        section.rowconfigure(1, weight=1)
+        ttk.Label(section, text=title, style="Section.TLabel").grid(
+            row=0, column=0, sticky="w", pady=(0, 6)
         )
-        content = ttk.Frame(card, style="CardBody.TFrame")
+        content = ttk.Frame(section, style="App.TFrame", padding=(indent, 0, 0, 0))
         content.grid(row=1, column=0, sticky="nsew")
-        card.content = content  # type: ignore[attr-defined]
-        return card
+        # Callers configure their own column weights (e.g. the field column for
+        # label/field rows, or column 0 for a full-width preview/list).
+        section.content = content  # type: ignore[attr-defined]
+        return section
 
     def _build_file_panel(self, parent: ttk.Frame) -> None:
-        card = self._make_card(parent, "文件 / SOURCE")
-        card.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        file_frame = card.content
+        section = self._make_section(parent, "文件 / SOURCE", indent=0)
+        section.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        file_frame = section.content
         file_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(file_frame, text="输入").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(file_frame, text="输入", style="Page.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
         ttk.Entry(file_frame, textvariable=self.input_var).grid(row=0, column=1, sticky="ew")
         ttk.Button(file_frame, text="选择文件", command=self._choose_input).grid(row=0, column=2, padx=(8, 0))
 
-        ttk.Label(file_frame, text="输出").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
+        ttk.Label(file_frame, text="输出", style="Page.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
         ttk.Entry(file_frame, textvariable=self.output_var).grid(row=1, column=1, sticky="ew", pady=(8, 0))
         ttk.Button(file_frame, text="选择目录", command=self._choose_output).grid(row=1, column=2, padx=(8, 0), pady=(8, 0))
 
@@ -248,6 +275,18 @@ class GlyphMotionApp(tk.Tk):
         )
         self.convert_button.grid(row=0, column=0, sticky="ew")
 
+        self.progress_var = tk.DoubleVar(value=0.0)
+        self.progress_bar = ttk.Progressbar(
+            action_frame,
+            orient=tk.HORIZONTAL,
+            mode="determinate",
+            maximum=100.0,
+            variable=self.progress_var,
+            style="Glyph.Horizontal.TProgressbar",
+        )
+        # Created hidden; shown only while a conversion is running.
+        self._progress_pady = (8, 0)
+
         self.status_var = tk.StringVar(value="● 就绪 / READY")
         self.status_label = ttk.Label(
             action_frame,
@@ -255,16 +294,16 @@ class GlyphMotionApp(tk.Tk):
             style="Status.TLabel",
             wraplength=300,
         )
-        self.status_label.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        self.status_label.grid(row=2, column=0, sticky="ew", pady=(8, 0))
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         self.status_label.configure(foreground=self.theme.accent2 if error else self.theme.accent)
         self.status_var.set(text)
 
     def _build_results_area(self, parent: ttk.Frame) -> None:
-        card = self._make_card(parent, "输出文件 / OUTPUT")
-        card.grid(row=1, column=0, sticky="ew", pady=(12, 0))
-        results = card.content
+        section = self._make_section(parent, "输出文件 / OUTPUT", indent=0)
+        section.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        results = section.content
         results.columnconfigure(0, weight=1)
 
         self.output_list = tk.Listbox(
@@ -300,12 +339,18 @@ class GlyphMotionApp(tk.Tk):
         self.open_file_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
-        preset_card = self._make_card(parent, "预设 / PRESET")
-        preset_card.grid(row=0, column=0, sticky="ew")
-        preset_frame = preset_card.content
+        parent.columnconfigure(0, weight=1)
+
+        # Subtle rule under the tab strip so sections read as one airy column.
+        rule = tk.Frame(parent, height=1, bg=self.theme.border, bd=0, highlightthickness=0)
+        rule.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+
+        preset = self._make_section(parent, "预设 / PRESET")
+        preset.grid(row=1, column=0, sticky="ew")
+        preset_frame = preset.content
         preset_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(preset_frame, text="效果").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(preset_frame, text="效果", style="Page.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
         preset_combo = ttk.Combobox(
             preset_frame,
             values=PRESET_COMBO_VALUES,
@@ -316,9 +361,9 @@ class GlyphMotionApp(tk.Tk):
         preset_combo.grid(row=0, column=1, sticky="ew")
         self.preset_var.trace_add("write", self._on_preset_changed)
 
-        grid_card = self._make_card(parent, "尺寸与时间 / GEOMETRY")
-        grid_card.grid(row=1, column=0, sticky="ew", pady=(12, 0))
-        grid_frame = grid_card.content
+        grid_section = self._make_section(parent, "尺寸与时间 / GEOMETRY")
+        grid_section.grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        grid_frame = grid_section.content
         grid_frame.columnconfigure(1, weight=1)
         grid_frame.columnconfigure(3, weight=1)
 
@@ -327,12 +372,12 @@ class GlyphMotionApp(tk.Tk):
         self._add_spinbox(grid_frame, 1, 0, "帧率", self.fps_var, 1, 60, 1)
         self._add_spinbox(grid_frame, 1, 2, "帧数", self.max_frames_var, 1, 5000, 10)
 
-        render_card = self._make_card(parent, "字符与渲染 / RENDER")
-        render_card.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        render_frame = render_card.content
+        render_section = self._make_section(parent, "字符与渲染 / RENDER")
+        render_section.grid(row=3, column=0, sticky="ew", pady=(16, 0))
+        render_frame = render_section.content
         render_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(render_frame, text="字符").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(render_frame, text="字符", style="Page.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
         ttk.Combobox(
             render_frame,
             values=[CHARSET_LABELS[name] for name in CHARSETS],
@@ -340,7 +385,7 @@ class GlyphMotionApp(tk.Tk):
             state="readonly",
         ).grid(row=0, column=1, sticky="ew")
 
-        ttk.Label(render_frame, text="模式").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
+        ttk.Label(render_frame, text="模式", style="Page.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
         ttk.Combobox(
             render_frame,
             values=list(RENDER_MODE_LABELS.values()),
@@ -348,9 +393,9 @@ class GlyphMotionApp(tk.Tk):
             state="readonly",
         ).grid(row=1, column=1, sticky="ew", pady=(8, 0))
 
-        options_card = self._make_card(parent, "处理选项 / OPTIONS")
-        options_card.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        options_frame = options_card.content
+        options_section = self._make_section(parent, "处理选项 / OPTIONS")
+        options_section.grid(row=4, column=0, sticky="ew", pady=(16, 0))
+        options_frame = options_section.content
         columns = 2
         for column in range(columns):
             options_frame.columnconfigure(column, weight=1)
@@ -366,7 +411,7 @@ class GlyphMotionApp(tk.Tk):
             ("硬轮廓线", self.edges_var),
         ]
         for index, (label, variable) in enumerate(checks):
-            ttk.Checkbutton(options_frame, text=label, variable=variable).grid(
+            ttk.Checkbutton(options_frame, text=label, variable=variable, style="Flat.TCheckbutton").grid(
                 row=index // columns,
                 column=index % columns,
                 sticky="w",
@@ -375,15 +420,21 @@ class GlyphMotionApp(tk.Tk):
             )
 
     def _build_output_tab(self, parent: ttk.Frame) -> None:
-        actions = ttk.Frame(parent)
-        actions.grid(row=0, column=0, sticky="ew")
+        parent.columnconfigure(0, weight=1)
+
+        # Subtle rule under the tab strip to match the settings tab.
+        rule = tk.Frame(parent, height=1, bg=self.theme.border, bd=0, highlightthickness=0)
+        rule.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+
+        actions = ttk.Frame(parent, style="App.TFrame")
+        actions.grid(row=1, column=0, sticky="ew")
         ttk.Button(actions, text="常用", command=self._select_common_formats).grid(row=0, column=0, sticky="w")
         ttk.Button(actions, text="全选", command=self._select_all_formats).grid(row=0, column=1, sticky="w", padx=(8, 0))
         ttk.Button(actions, text="清空", command=self._clear_formats).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
-        formats_card = self._make_card(parent, "格式 / FORMATS")
-        formats_card.grid(row=1, column=0, sticky="new", pady=(12, 0))
-        formats_frame = formats_card.content
+        formats_section = self._make_section(parent, "格式 / FORMATS")
+        formats_section.grid(row=2, column=0, sticky="new", pady=(16, 0))
+        formats_frame = formats_section.content
         for column in range(2):
             formats_frame.columnconfigure(column, weight=1)
 
@@ -394,6 +445,7 @@ class GlyphMotionApp(tk.Tk):
                 formats_frame,
                 text=self._format_checkbox_label(name, tool_available),
                 variable=variable,
+                style="Flat.TCheckbutton",
             ).grid(row=index // 2, column=index % 2, sticky="w", pady=4, padx=(0, 10))
 
     @staticmethod
@@ -448,19 +500,19 @@ class GlyphMotionApp(tk.Tk):
         ybar.grid(row=0, column=1, sticky="ns")
         xbar.grid(row=1, column=0, sticky="ew")
 
-        toolbar = ttk.Frame(parent, style="CardBody.TFrame")
+        toolbar = ttk.Frame(parent, style="App.TFrame")
         toolbar.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         toolbar.columnconfigure(4, weight=1)
 
         self.prev_button = ttk.Button(toolbar, text="◀ 上一帧", command=self._preview_prev, state=tk.DISABLED)
         self.prev_button.grid(row=0, column=0)
-        self.play_button = ttk.Button(toolbar, text="▶ 播放", command=self._toggle_preview_play, state=tk.DISABLED)
-        self.play_button.grid(row=0, column=1, padx=(8, 0))
+        self.random_button = ttk.Button(toolbar, text="🎲 随机一帧", command=self._preview_random, state=tk.DISABLED)
+        self.random_button.grid(row=0, column=1, padx=(8, 0))
         self.next_button = ttk.Button(toolbar, text="下一帧 ▶", command=self._preview_next, state=tk.DISABLED)
         self.next_button.grid(row=0, column=2, padx=(8, 0))
 
         self.preview_meta_var = tk.StringVar(value="帧 0 / 0")
-        ttk.Label(toolbar, textvariable=self.preview_meta_var).grid(row=0, column=3, padx=(12, 0))
+        ttk.Label(toolbar, textvariable=self.preview_meta_var, style="Page.TLabel").grid(row=0, column=3, padx=(12, 0))
 
         ttk.Button(toolbar, text="A－", width=4, command=lambda: self._zoom_preview(-1)).grid(row=0, column=5)
         ttk.Button(toolbar, text="A＋", width=4, command=lambda: self._zoom_preview(1)).grid(row=0, column=6, padx=(8, 0))
@@ -468,67 +520,44 @@ class GlyphMotionApp(tk.Tk):
     # ----- colored preview rendering -------------------------------------
 
     def _clear_preview(self) -> None:
-        self._stop_preview()
+        self._preview_animation = None
         self.preview.configure(state=tk.NORMAL)
         self.preview.delete("1.0", tk.END)
+        self.preview.configure(state=tk.DISABLED)
         self.preview_meta_var.set("帧 0 / 0")
+        for button in (self.prev_button, self.random_button, self.next_button):
+            button.configure(state=tk.DISABLED)
 
     def _set_preview_animation(self, animation: AsciiAnimation) -> None:
-        self._stop_preview()
         self._preview_animation = animation
-        self._preview_index = 0
-        self._render_preview_frame(0)
+        # Spot-check the result on a random frame rather than always frame 0,
+        # so a single glance is more representative of the whole clip.
+        index = random.randrange(len(animation.frames)) if animation.frames else 0
+        self._render_preview_frame(index)
         multi = len(animation.frames) > 1
         state = tk.NORMAL if multi else tk.DISABLED
-        for button in (self.prev_button, self.play_button, self.next_button):
+        for button in (self.prev_button, self.random_button, self.next_button):
             button.configure(state=state)
-
-    def _stop_preview(self) -> None:
-        self._preview_playing = False
-        if self._preview_after_id is not None:
-            self.after_cancel(self._preview_after_id)
-            self._preview_after_id = None
-        if hasattr(self, "play_button"):
-            self.play_button.configure(text="▶ 播放")
-
-    def _toggle_preview_play(self) -> None:
-        animation = self._preview_animation
-        if not animation or len(animation.frames) <= 1:
-            return
-        if self._preview_playing:
-            self._stop_preview()
-        else:
-            self._preview_playing = True
-            self.play_button.configure(text="⏸ 暂停")
-            self._schedule_preview()
-
-    def _schedule_preview(self) -> None:
-        animation = self._preview_animation
-        if not self._preview_playing or not animation or len(animation.frames) <= 1:
-            return
-        delay = max(33, int(animation.frames[self._preview_index].duration * 1000))
-        self._preview_after_id = self.after(delay, self._advance_preview)
-
-    def _advance_preview(self) -> None:
-        animation = self._preview_animation
-        if not self._preview_playing or not animation:
-            return
-        self._render_preview_frame((self._preview_index + 1) % len(animation.frames))
-        self._schedule_preview()
 
     def _preview_prev(self) -> None:
         animation = self._preview_animation
         if not animation:
             return
-        self._stop_preview()
         self._render_preview_frame((self._preview_index - 1) % len(animation.frames))
 
     def _preview_next(self) -> None:
         animation = self._preview_animation
         if not animation:
             return
-        self._stop_preview()
         self._render_preview_frame((self._preview_index + 1) % len(animation.frames))
+
+    def _preview_random(self) -> None:
+        animation = self._preview_animation
+        if not animation or len(animation.frames) <= 1:
+            return
+        # Jump to a different frame than the one already shown.
+        choices = [i for i in range(len(animation.frames)) if i != self._preview_index]
+        self._render_preview_frame(random.choice(choices))
 
     def _zoom_preview(self, delta: int) -> None:
         self._preview_zoom = max(0, min(len(self._preview_font_sizes) - 1, self._preview_zoom + delta))
@@ -596,7 +625,7 @@ class GlyphMotionApp(tk.Tk):
         to: float,
         increment: float,
     ) -> None:
-        ttk.Label(parent, text=label).grid(row=row, column=column, sticky="w", padx=(0, 8), pady=4)
+        ttk.Label(parent, text=label, style="Page.TLabel").grid(row=row, column=column, sticky="w", padx=(0, 8), pady=4)
         ttk.Spinbox(
             parent,
             from_=from_,
@@ -686,11 +715,36 @@ class GlyphMotionApp(tk.Tk):
         request = self._build_request(formats)
 
         self._conversion_running = True
-        self.convert_button.configure(state=tk.DISABLED)
+        self._cancel_event = threading.Event()
+        # The convert button doubles as a cancel button while work is running.
+        self.convert_button.configure(
+            text="取消转换 / CANCEL",
+            style="Danger.TButton",
+            command=self._cancel_convert,
+            state=tk.NORMAL,
+        )
+        self._show_progress()
         self._set_status("● 正在转换 / RUNNING…")
         self._clear_preview()
-        thread = threading.Thread(target=self._convert_worker, args=(request,), daemon=True)
+        thread = threading.Thread(
+            target=self._convert_worker, args=(request, self._cancel_event), daemon=True
+        )
         thread.start()
+
+    def _cancel_convert(self) -> None:
+        if not self._conversion_running or self._cancel_event is None:
+            return
+        self._cancel_event.set()
+        # Disable until the worker acknowledges, so it can't be clicked twice.
+        self.convert_button.configure(state=tk.DISABLED)
+        self._set_status("● 正在取消 / CANCELLING…")
+
+    def _show_progress(self) -> None:
+        self.progress_var.set(0.0)
+        self.progress_bar.grid(row=1, column=0, sticky="ew", pady=self._progress_pady)
+
+    def _hide_progress(self) -> None:
+        self.progress_bar.grid_remove()
 
     def _build_request(self, formats: list[str]) -> ConversionRequest:
         """Read every Tkinter variable on the main thread into a snapshot."""
@@ -724,11 +778,38 @@ class GlyphMotionApp(tk.Tk):
             chafa_path=find_chafa(),
         )
 
-    def _convert_worker(self, request: ConversionRequest) -> None:
-        """Run the conversion off the main thread using only the snapshot."""
+    def _convert_worker(self, request: ConversionRequest, cancel_event: threading.Event) -> None:
+        """Run the conversion off the main thread using only the snapshot.
+
+        Progress and cancellation cross the thread boundary through the work
+        queue / the shared ``cancel_event``; the worker never touches Tkinter.
+        Frame rendering takes the bulk of the time, so it owns most of the
+        progress range (5–78%) and export fills the rest.
+        """
+
+        def should_cancel() -> bool:
+            return cancel_event.is_set()
+
+        def on_frame(done: int, total: int) -> None:
+            fraction = 0.05 + 0.73 * (done / max(1, total))
+            self.work_queue.put(
+                ConversionProgress(f"● 渲染帧 / FRAMES {done}/{total}", fraction)
+            )
+
+        def on_export(done: int, total: int, name: str) -> None:
+            fraction = 0.78 + 0.22 * (done / max(1, total))
+            self.work_queue.put(
+                ConversionProgress(f"● 导出 / EXPORT {name.upper()} {done}/{total}", fraction)
+            )
+
         try:
+            self.work_queue.put(ConversionProgress("● 解码中 / DECODING…", 0.02))
             animation = convert_file(
-                request.input_path, request.options, ffmpeg_path=request.ffmpeg_path
+                request.input_path,
+                request.options,
+                ffmpeg_path=request.ffmpeg_path,
+                progress=on_frame,
+                should_cancel=should_cancel,
             )
             outputs = export_many(
                 animation,
@@ -737,9 +818,13 @@ class GlyphMotionApp(tk.Tk):
                 color=request.color,
                 ffmpeg_path=request.ffmpeg_path,
                 chafa_path=request.chafa_path,
+                progress=on_export,
+                should_cancel=should_cancel,
             )
             preview = "\n".join(animation.frames[0].lines)
             self.work_queue.put(ConversionSuccess(animation=animation, outputs=outputs, preview=preview))
+        except ConversionCancelledError:
+            self.work_queue.put(ConversionCancelled())
         except (ConversionError, OSError, RuntimeError, ValueError) as exc:
             self.work_queue.put(ConversionFailure(message=str(exc)))
 
@@ -752,13 +837,19 @@ class GlyphMotionApp(tk.Tk):
 
         if isinstance(message, ConversionProgress):
             self._set_status(message.message)
+            if message.fraction is not None:
+                self.progress_var.set(max(0.0, min(100.0, message.fraction * 100)))
         elif isinstance(message, ConversionSuccess):
+            self.progress_var.set(100.0)
             self._finish_conversion()
             self._set_preview_animation(message.animation)
             self._set_outputs(message.outputs)
             self._set_status(
                 f"● 完成 / DONE — {len(message.animation.frames)} 帧，{len(message.outputs)} 个文件"
             )
+        elif isinstance(message, ConversionCancelled):
+            self._finish_conversion()
+            self._set_status("● 已取消 / CANCELLED")
         elif isinstance(message, ConversionFailure):
             self._finish_conversion()
             self._set_status("● 转换失败 / FAILED", error=True)
@@ -767,7 +858,14 @@ class GlyphMotionApp(tk.Tk):
 
     def _finish_conversion(self) -> None:
         self._conversion_running = False
-        self.convert_button.configure(state=tk.NORMAL)
+        self._cancel_event = None
+        self._hide_progress()
+        self.convert_button.configure(
+            text="开始转换",
+            style="Primary.TButton",
+            command=self._start_convert,
+            state=tk.NORMAL,
+        )
 
     def _set_outputs(self, outputs: list[Path]) -> None:
         self.last_outputs = list(outputs)
