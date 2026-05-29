@@ -3,12 +3,14 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import APP_NAME
 from .core import (
     CHARSETS,
+    AsciiAnimation,
     ConversionError,
     ConvertOptions,
     adaptive_char_aspect,
@@ -52,13 +54,52 @@ PRESET_NAME_BY_LABEL = {preset.label: preset.name for preset in PRESETS}
 PRESET_LABEL_BY_NAME = {preset.name: preset.label for preset in PRESETS}
 
 
+@dataclass(frozen=True)
+class ConversionRequest:
+    """Immutable snapshot of everything a conversion needs.
+
+    Built on the main thread from the Tkinter variables, then handed to the
+    background worker. The worker must not read any Tkinter state.
+    """
+
+    input_path: str
+    output_dir: str
+    formats: tuple[str, ...]
+    options: ConvertOptions
+    color: bool
+    ffmpeg_path: str | None
+    chafa_path: str | None
+
+
+@dataclass(frozen=True)
+class ConversionSuccess:
+    animation: AsciiAnimation
+    outputs: list[Path]
+    preview: str
+
+
+@dataclass(frozen=True)
+class ConversionFailure:
+    message: str
+
+
+@dataclass(frozen=True)
+class ConversionProgress:
+    message: str
+
+
+# Anything the worker may place on the queue for the UI thread to consume.
+ConversionMessage = ConversionSuccess | ConversionFailure | ConversionProgress
+
+
 class GlyphMotionApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_NAME)
         self.geometry("980x700")
         self.minsize(860, 560)
-        self.work_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.work_queue: queue.Queue[ConversionMessage] = queue.Queue()
+        self._conversion_running = False
 
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar(value=str(Path.cwd() / "输出"))
@@ -367,7 +408,10 @@ class GlyphMotionApp(tk.Tk):
         return [name for name, variable in self.format_vars.items() if variable.get()]
 
     def _start_convert(self) -> None:
-        if not self.input_var.get():
+        if self._conversion_running:
+            # Guard against a second conversion while one is in flight.
+            return
+        if not self.input_var.get().strip():
             messagebox.showerror("缺少输入文件", "请先选择一个图片、GIF 或视频文件。")
             return
         formats = self._selected_formats()
@@ -375,67 +419,92 @@ class GlyphMotionApp(tk.Tk):
             messagebox.showerror("缺少导出格式", "请至少选择一种导出格式。")
             return
 
+        request = self._build_request(formats)
+
+        self._conversion_running = True
         self.convert_button.configure(state=tk.DISABLED)
         self.status_var.set("正在转换...")
         self.preview.delete("1.0", tk.END)
-        thread = threading.Thread(target=self._convert_worker, args=(formats,), daemon=True)
+        thread = threading.Thread(target=self._convert_worker, args=(request,), daemon=True)
         thread.start()
 
-    def _convert_worker(self, formats: list[str]) -> None:
+    def _build_request(self, formats: list[str]) -> ConversionRequest:
+        """Read every Tkinter variable on the main thread into a snapshot."""
+        charset_name = CHARSET_NAMES_BY_LABEL.get(self.charset_var.get(), "default")
+        use_color = self.color_var.get()
+        options = ConvertOptions(
+            columns=self.width_var.get(),
+            fps=self.fps_var.get(),
+            charset_name=charset_name,
+            render_mode=RENDER_MODE_NAMES_BY_LABEL.get(self.render_mode_var.get(), "ascii"),
+            invert=self.invert_var.get(),
+            color=use_color,
+            max_frames=self.max_frames_var.get(),
+            char_aspect=self.aspect_var.get(),
+            autocontrast=self.autocontrast_var.get(),
+            clean=self.clean_var.get(),
+            edges=self.edges_var.get(),
+            hierarchy=self.hierarchy_var.get(),
+            separation=self.separation_var.get(),
+            detail=self.detail_var.get(),
+            color_grade=self.color_grade,
+            supersample=self.supersample,
+        )
+        return ConversionRequest(
+            input_path=self.input_var.get().strip(),
+            output_dir=self.output_var.get(),
+            formats=tuple(formats),
+            options=options,
+            color=use_color,
+            ffmpeg_path=find_ffmpeg(),
+            chafa_path=find_chafa(),
+        )
+
+    def _convert_worker(self, request: ConversionRequest) -> None:
+        """Run the conversion off the main thread using only the snapshot."""
         try:
-            charset_name = CHARSET_NAMES_BY_LABEL.get(self.charset_var.get(), "default")
-            use_color = self.color_var.get()
-            options = ConvertOptions(
-                columns=self.width_var.get(),
-                fps=self.fps_var.get(),
-                charset_name=charset_name,
-                render_mode=RENDER_MODE_NAMES_BY_LABEL.get(self.render_mode_var.get(), "ascii"),
-                invert=self.invert_var.get(),
-                color=use_color,
-                max_frames=self.max_frames_var.get(),
-                char_aspect=self.aspect_var.get(),
-                autocontrast=self.autocontrast_var.get(),
-                clean=self.clean_var.get(),
-                edges=self.edges_var.get(),
-                hierarchy=self.hierarchy_var.get(),
-                separation=self.separation_var.get(),
-                detail=self.detail_var.get(),
-                color_grade=self.color_grade,
-                supersample=self.supersample,
+            animation = convert_file(
+                request.input_path, request.options, ffmpeg_path=request.ffmpeg_path
             )
-            ffmpeg = find_ffmpeg()
-            chafa = find_chafa()
-            animation = convert_file(self.input_var.get(), options, ffmpeg_path=ffmpeg)
             outputs = export_many(
                 animation,
-                self.output_var.get(),
-                formats,
-                color=use_color,
-                ffmpeg_path=ffmpeg,
-                chafa_path=chafa,
+                request.output_dir,
+                list(request.formats),
+                color=request.color,
+                ffmpeg_path=request.ffmpeg_path,
+                chafa_path=request.chafa_path,
             )
             preview = "\n".join(animation.frames[0].lines)
-            self.work_queue.put(("done", (animation, outputs, preview)))
+            self.work_queue.put(ConversionSuccess(animation=animation, outputs=outputs, preview=preview))
         except (ConversionError, OSError, RuntimeError, ValueError) as exc:
-            self.work_queue.put(("error", str(exc)))
+            self.work_queue.put(ConversionFailure(message=str(exc)))
 
     def _poll_queue(self) -> None:
         try:
-            kind, payload = self.work_queue.get_nowait()
+            message = self.work_queue.get_nowait()
         except queue.Empty:
             self.after(100, self._poll_queue)
             return
 
-        self.convert_button.configure(state=tk.NORMAL)
-        if kind == "done":
-            animation, outputs, preview = payload
-            self.preview.insert("1.0", preview)
-            self.status_var.set(f"完成：{len(animation.frames)} 帧，生成 {len(outputs)} 个文件")
-            messagebox.showinfo("转换完成", "已生成：\n" + "\n".join(str(path) for path in outputs))
-        else:
+        if isinstance(message, ConversionProgress):
+            self.status_var.set(message.message)
+        elif isinstance(message, ConversionSuccess):
+            self._finish_conversion()
+            self.preview.delete("1.0", tk.END)
+            self.preview.insert("1.0", message.preview)
+            self.status_var.set(
+                f"完成：{len(message.animation.frames)} 帧，生成 {len(message.outputs)} 个文件"
+            )
+            messagebox.showinfo("转换完成", "已生成：\n" + "\n".join(str(path) for path in message.outputs))
+        elif isinstance(message, ConversionFailure):
+            self._finish_conversion()
             self.status_var.set("转换失败")
-            messagebox.showerror("转换失败", str(payload))
+            messagebox.showerror("转换失败", message.message)
         self.after(100, self._poll_queue)
+
+    def _finish_conversion(self) -> None:
+        self._conversion_running = False
+        self.convert_button.configure(state=tk.NORMAL)
 
 
 def main() -> None:
