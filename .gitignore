@@ -29,6 +29,7 @@ reference/
 # Generated test exports
 tests/*
 !tests/smoke.py
+!tests/run_tests.py
 !tests/test_*.py
 !tests/fixtures/
 !tests/fixtures/**
