@@ -26,7 +26,12 @@ def build_parser() -> argparse.ArgumentParser:
         prog="glyphmotion",
         description=f"{APP_NAME}: convert images, GIFs, and videos into character-art animations.",
     )
-    parser.add_argument("input", help="Input image, GIF, or video file.")
+    parser.add_argument(
+        "input",
+        nargs="?",
+        default=None,
+        help="Input image, GIF, or video file. Optional when using --tools.",
+    )
     parser.add_argument(
         "-o",
         "--output-dir",
@@ -102,16 +107,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    ffmpeg = args.ffmpeg or find_ffmpeg()
-    chafa = args.chafa or find_chafa()
-    if args.tools:
-        print(f"ffmpeg: {ffmpeg or 'not found'}")
-        print(f"chafa: {chafa or 'not found'}")
-        print(f"ascii-image-converter: {find_ascii_image_converter() or 'not found'}")
-        return 0
+def build_options(args: argparse.Namespace) -> ConvertOptions:
+    """Resolve parsed CLI arguments (including presets) into ConvertOptions.
 
+    Extracted from main() so preset/option mapping can be unit tested without
+    running an actual conversion.
+    """
     preset = "shader-color" if args.shader_color else args.preset
     charset_name = args.charset
     render_mode = args.mode
@@ -236,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         clean = True
         edges = False
 
-    options = ConvertOptions(
+    return ConvertOptions(
         columns=args.width,
         fps=args.fps,
         charset_name=charset_name,
@@ -259,6 +260,23 @@ def main(argv: list[str] | None = None) -> int:
         color_grade=color_grade,
         supersample=supersample,
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    ffmpeg = args.ffmpeg or find_ffmpeg()
+    chafa = args.chafa or find_chafa()
+    if args.tools:
+        print(f"ffmpeg: {ffmpeg or 'not found'}")
+        print(f"chafa: {chafa or 'not found'}")
+        print(f"ascii-image-converter: {find_ascii_image_converter() or 'not found'}")
+        return 0
+
+    if not args.input:
+        print("error: input file is required (or use --tools to list detected tools)", file=sys.stderr)
+        return 2
+
+    options = build_options(args)
     formats = [item.strip() for item in args.formats.split(",")]
 
     try:
@@ -267,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
             animation,
             args.output_dir,
             formats,
-            color=not mono,
+            color=options.color,
             ffmpeg_path=ffmpeg,
             chafa_path=chafa,
         )
