@@ -448,16 +448,91 @@ class GlyphMotionApp(tk.Tk):
         ybar.grid(row=0, column=1, sticky="ns")
         xbar.grid(row=1, column=0, sticky="ew")
 
+        toolbar = ttk.Frame(parent, style="CardBody.TFrame")
+        toolbar.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        toolbar.columnconfigure(4, weight=1)
+
+        self.prev_button = ttk.Button(toolbar, text="◀ 上一帧", command=self._preview_prev, state=tk.DISABLED)
+        self.prev_button.grid(row=0, column=0)
+        self.play_button = ttk.Button(toolbar, text="▶ 播放", command=self._toggle_preview_play, state=tk.DISABLED)
+        self.play_button.grid(row=0, column=1, padx=(8, 0))
+        self.next_button = ttk.Button(toolbar, text="下一帧 ▶", command=self._preview_next, state=tk.DISABLED)
+        self.next_button.grid(row=0, column=2, padx=(8, 0))
+
+        self.preview_meta_var = tk.StringVar(value="帧 0 / 0")
+        ttk.Label(toolbar, textvariable=self.preview_meta_var).grid(row=0, column=3, padx=(12, 0))
+
+        ttk.Button(toolbar, text="A－", width=4, command=lambda: self._zoom_preview(-1)).grid(row=0, column=5)
+        ttk.Button(toolbar, text="A＋", width=4, command=lambda: self._zoom_preview(1)).grid(row=0, column=6, padx=(8, 0))
+
     # ----- colored preview rendering -------------------------------------
 
     def _clear_preview(self) -> None:
+        self._stop_preview()
         self.preview.configure(state=tk.NORMAL)
         self.preview.delete("1.0", tk.END)
+        self.preview_meta_var.set("帧 0 / 0")
 
     def _set_preview_animation(self, animation: AsciiAnimation) -> None:
+        self._stop_preview()
         self._preview_animation = animation
         self._preview_index = 0
         self._render_preview_frame(0)
+        multi = len(animation.frames) > 1
+        state = tk.NORMAL if multi else tk.DISABLED
+        for button in (self.prev_button, self.play_button, self.next_button):
+            button.configure(state=state)
+
+    def _stop_preview(self) -> None:
+        self._preview_playing = False
+        if self._preview_after_id is not None:
+            self.after_cancel(self._preview_after_id)
+            self._preview_after_id = None
+        if hasattr(self, "play_button"):
+            self.play_button.configure(text="▶ 播放")
+
+    def _toggle_preview_play(self) -> None:
+        animation = self._preview_animation
+        if not animation or len(animation.frames) <= 1:
+            return
+        if self._preview_playing:
+            self._stop_preview()
+        else:
+            self._preview_playing = True
+            self.play_button.configure(text="⏸ 暂停")
+            self._schedule_preview()
+
+    def _schedule_preview(self) -> None:
+        animation = self._preview_animation
+        if not self._preview_playing or not animation or len(animation.frames) <= 1:
+            return
+        delay = max(33, int(animation.frames[self._preview_index].duration * 1000))
+        self._preview_after_id = self.after(delay, self._advance_preview)
+
+    def _advance_preview(self) -> None:
+        animation = self._preview_animation
+        if not self._preview_playing or not animation:
+            return
+        self._render_preview_frame((self._preview_index + 1) % len(animation.frames))
+        self._schedule_preview()
+
+    def _preview_prev(self) -> None:
+        animation = self._preview_animation
+        if not animation:
+            return
+        self._stop_preview()
+        self._render_preview_frame((self._preview_index - 1) % len(animation.frames))
+
+    def _preview_next(self) -> None:
+        animation = self._preview_animation
+        if not animation:
+            return
+        self._stop_preview()
+        self._render_preview_frame((self._preview_index + 1) % len(animation.frames))
+
+    def _zoom_preview(self, delta: int) -> None:
+        self._preview_zoom = max(0, min(len(self._preview_font_sizes) - 1, self._preview_zoom + delta))
+        self.preview.configure(font=(self.theme.mono_font, self._preview_font_sizes[self._preview_zoom]))
 
     def _render_preview_frame(self, index: int) -> None:
         animation = self._preview_animation
@@ -476,6 +551,7 @@ class GlyphMotionApp(tk.Tk):
             text.delete("1.0", tk.END)
             text.insert("1.0", "\n".join(frame.lines))
         text.configure(state=tk.DISABLED)
+        self.preview_meta_var.set(f"帧 {index + 1} / {len(animation.frames)}")
 
     def _insert_colored_frame(self, frame) -> None:
         """Insert one frame, colouring runs of same-coloured characters."""

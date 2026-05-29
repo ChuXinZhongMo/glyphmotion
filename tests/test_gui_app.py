@@ -81,6 +81,53 @@ def test_success_populates_output_list_and_restores_button() -> None:
         app.destroy()
 
 
+def test_preview_player() -> None:
+    app = _make_app()
+    try:
+        frames = [
+            AsciiFrame(
+                lines=["ab", "cd"],
+                colors=[[(255, 0, 0), (0, 255, 0)], [(0, 0, 255), (255, 255, 0)]],
+                duration=0.05,
+            )
+            for _ in range(3)
+        ]
+        anim = AsciiAnimation(frames=frames, columns=2, rows=2, fps=10, source=Path("x.gif"))
+        app._set_preview_animation(anim)
+        # First frame shown, controls enabled for a multi-frame animation.
+        assert app.preview_meta_var.get() == "帧 1 / 3"
+        assert str(app.play_button["state"]) == "normal"
+        assert "ab" in app.preview.get("1.0", "end-1c")
+        # Stepping advances the frame counter.
+        app._preview_next()
+        assert app._preview_index == 1
+        assert app.preview_meta_var.get() == "帧 2 / 3"
+        app._preview_prev()
+        assert app._preview_index == 0
+        # Play toggles state and schedules; stop cancels.
+        app._toggle_preview_play()
+        assert app._preview_playing is True
+        app._stop_preview()
+        assert app._preview_playing is False
+        # Zoom must not raise.
+        app._zoom_preview(1)
+        app._zoom_preview(-1)
+    finally:
+        app.destroy()
+
+
+def test_preview_single_frame_disables_playback() -> None:
+    app = _make_app()
+    try:
+        frame = AsciiFrame(lines=["xy"], colors=[[(10, 20, 30), (40, 50, 60)]], duration=0.1)
+        anim = AsciiAnimation(frames=[frame], columns=2, rows=1, fps=10, source=Path("x.gif"))
+        app._set_preview_animation(anim)
+        assert app.preview_meta_var.get() == "帧 1 / 1"
+        assert str(app.play_button["state"]) == "disabled"
+    finally:
+        app.destroy()
+
+
 # ---- Pure-logic test (no display needed) -----------------------------------
 
 def test_format_checkbox_label_tool_hints() -> None:
@@ -98,6 +145,8 @@ TK_TESTS = [
     test_app_builds_and_destroys,
     test_preset_change_updates_controls,
     test_success_populates_output_list_and_restores_button,
+    test_preview_player,
+    test_preview_single_frame_disables_playback,
 ]
 LOGIC_TESTS = [
     test_format_checkbox_label_tool_hints,
