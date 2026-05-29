@@ -107,6 +107,15 @@ class GlyphMotionApp(tk.Tk):
         self.last_outputs: list[Path] = []
         self.last_output_dir: Path | None = None
 
+        # Preview player state
+        self._preview_animation: AsciiAnimation | None = None
+        self._preview_index = 0
+        self._preview_playing = False
+        self._preview_after_id: str | None = None
+        self._preview_tags: dict[tuple, str] = {}
+        self._preview_font_sizes = (8, 11, 14)
+        self._preview_zoom = 0
+
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar(value=str(Path.cwd() / "输出"))
         self.width_var = tk.IntVar(value=100)
@@ -402,30 +411,103 @@ class GlyphMotionApp(tk.Tk):
             note = f"需 {tool_display}" if available else f"需 {tool_display}，未检测到"
         return f"{fmt.label}（{note}）"
 
-    def _build_preview_panel(self, parent: ttk.LabelFrame) -> None:
+    def _build_preview_panel(self, parent: ttk.Frame) -> None:
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
-        self.preview = tk.Text(
+
+        screen = tk.Frame(
             parent,
+            bg=self.theme.preview_bg,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=self.theme.border,
+            highlightcolor=self.theme.border,
+        )
+        screen.grid(row=0, column=0, sticky="nsew")
+        screen.rowconfigure(0, weight=1)
+        screen.columnconfigure(0, weight=1)
+
+        self.preview = tk.Text(
+            screen,
             wrap="none",
-            bg=self.theme.input_bg,
-            fg=self.theme.fg,
+            bg=self.theme.preview_bg,
+            fg=self.theme.preview_fg,
             insertbackground=self.theme.accent,
             selectbackground=self.theme.accent,
             selectforeground="#ffffff",
             relief="flat",
             borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=self.theme.border,
-            highlightcolor=self.theme.border,
-            font=(self.theme.mono_font, 8),
+            highlightthickness=0,
+            font=(self.theme.mono_font, self._preview_font_sizes[self._preview_zoom]),
+            cursor="arrow",
         )
         self.preview.grid(row=0, column=0, sticky="nsew")
-        ybar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.preview.yview)
-        xbar = ttk.Scrollbar(parent, orient=tk.HORIZONTAL, command=self.preview.xview)
+        ybar = ttk.Scrollbar(screen, orient=tk.VERTICAL, command=self.preview.yview)
+        xbar = ttk.Scrollbar(screen, orient=tk.HORIZONTAL, command=self.preview.xview)
         self.preview.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
         ybar.grid(row=0, column=1, sticky="ns")
         xbar.grid(row=1, column=0, sticky="ew")
+
+    # ----- colored preview rendering -------------------------------------
+
+    def _clear_preview(self) -> None:
+        self.preview.configure(state=tk.NORMAL)
+        self.preview.delete("1.0", tk.END)
+
+    def _set_preview_animation(self, animation: AsciiAnimation) -> None:
+        self._preview_animation = animation
+        self._preview_index = 0
+        self._render_preview_frame(0)
+
+    def _render_preview_frame(self, index: int) -> None:
+        animation = self._preview_animation
+        if not animation or not animation.frames:
+            return
+        index = max(0, min(index, len(animation.frames) - 1))
+        self._preview_index = index
+        frame = animation.frames[index]
+        text = self.preview
+        text.configure(state=tk.NORMAL)
+        text.delete("1.0", tk.END)
+        try:
+            self._insert_colored_frame(frame)
+        except Exception:
+            # Colour rendering must never block the user from seeing output.
+            text.delete("1.0", tk.END)
+            text.insert("1.0", "\n".join(frame.lines))
+        text.configure(state=tk.DISABLED)
+
+    def _insert_colored_frame(self, frame) -> None:
+        """Insert one frame, colouring runs of same-coloured characters."""
+        text = self.preview
+        colors = frame.colors
+        bg_colors = frame.bg_colors
+        for y, line in enumerate(frame.lines):
+            row_fg = colors[y]
+            row_bg = bg_colors[y] if bg_colors else None
+            width = len(line)
+            x = 0
+            while x < width:
+                fg = row_fg[x]
+                bg = row_bg[x] if row_bg else None
+                end = x + 1
+                while end < width and row_fg[end] == fg and (row_bg[end] if row_bg else None) == bg:
+                    end += 1
+                text.insert(tk.END, line[x:end], self._preview_tag(fg, bg))
+                x = end
+            text.insert(tk.END, "\n")
+
+    def _preview_tag(self, fg: tuple, bg: tuple | None) -> str:
+        key = (fg, bg)
+        tag = self._preview_tags.get(key)
+        if tag is None:
+            tag = f"pc{len(self._preview_tags)}"
+            options = {"foreground": "#%02x%02x%02x" % tuple(fg)}
+            if bg is not None:
+                options["background"] = "#%02x%02x%02x" % tuple(bg)
+            self.preview.tag_configure(tag, **options)
+            self._preview_tags[key] = tag
+        return tag
 
     def _add_spinbox(
         self,
@@ -530,7 +612,7 @@ class GlyphMotionApp(tk.Tk):
         self._conversion_running = True
         self.convert_button.configure(state=tk.DISABLED)
         self._set_status("● 正在转换 / RUNNING…")
-        self.preview.delete("1.0", tk.END)
+        self._clear_preview()
         thread = threading.Thread(target=self._convert_worker, args=(request,), daemon=True)
         thread.start()
 
@@ -596,8 +678,7 @@ class GlyphMotionApp(tk.Tk):
             self._set_status(message.message)
         elif isinstance(message, ConversionSuccess):
             self._finish_conversion()
-            self.preview.delete("1.0", tk.END)
-            self.preview.insert("1.0", message.preview)
+            self._set_preview_animation(message.animation)
             self._set_outputs(message.outputs)
             self._set_status(
                 f"● 完成 / DONE — {len(message.animation.frames)} 帧，{len(message.outputs)} 个文件"

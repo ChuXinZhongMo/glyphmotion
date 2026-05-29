@@ -41,6 +41,11 @@ class Theme:
     # Shadow (semi-transparent violet)
     shadow_rgba: tuple = (124, 95, 208, 70)
 
+    # Preview "screen" — dark so the character-art colours (designed for the
+    # near-black export background) stay visible.
+    preview_bg: str = "#15111f"
+    preview_fg: str = "#e9e3f6"
+
     mono_font: str = "Consolas"
 
 
